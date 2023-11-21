@@ -22,6 +22,11 @@ import multiprocessing
 import warnings
 
 
+MM = 1000.0
+UM = 1.0
+NM = 1.0 / 1000.0
+
+
 class FociWarning(UserWarning):
     pass
 
@@ -161,6 +166,9 @@ class VectorialPupil(object):
         plt.tight_layout()
 
 
+# Utility functions
+
+
 def elliptical_polarize(pupil: VectorialPupil, dphase: float=PI/2) -> VectorialPupil:
     """
     Applies circular or elliptical polarization to the pupil.
@@ -225,14 +233,11 @@ def ring_beam(N, radius, waist):
     return field + 0j
 
 
-# TODO shift so that mm is 1.0
-MM = 1000.0
-UM = 1.0
-NM = 1.0 / 1000.0
+
 
 # Lens parameters
-PUPIL_DIAMETER = 25 * MM
-FOCAL_LENGTH = 12.5 * MM
+PUPIL_DIAMETER = 21 * MM
+FOCAL_LENGTH = 8 * MM
 WAVELENGTH = 750 * NM 
 
 # Field parameters
@@ -257,8 +262,110 @@ pupil.display()
 
 # %%
 
+
+class Objective(object):
+    
+    def __init__(
+            self,
+            wavelength: float,
+            sample_index: float,
+            focal_length: float,
+            pupil_diameter: int,
+            pupil_n: int,
+            field_diameter: float,
+            precision: str = 'complex128'
+         ):
+        
+        if precision in ['single', 'float', 'float32', 'complex64']:
+            self._precision = 'complex64'
+        else:
+            self._precision = 'complex128'
+        
+        self._wavelength = wavelength
+        self._index = sample_index
+        self._focal_length = focal_length
+        self._pupil_diameter = pupil_diameter        
+        self._N = pupil_n  # Pupil and focal field planar sampling
+        self._field_diameter = field_diameter
+        
+        angle_of_convergence = np.arctan(pupil_diameter / (2 * focal_length))
+        self._na = self._index * np.sin(angle_of_convergence)
+        
+        self._angle_of_convergence = np.arctan(self._pupil_diameter / (2 * self._focal_length))
+        self._px_per_m = self._N / self._field_diameter
+        
+        # Spatial frequency unit and angular bandwidth
+        k = self._index * 2 * PI / WAVELENGTH  # Wavenumber
+        dk = k / (2 * PI) / self._px_per_m
+        k_bandwidth = dk * np.sin(self._angle_of_convergence)
+        
+        # k-space coordinates of pupil plane
+        kx = np.linspace(-k_bandwidth, k_bandwidth, self._N)
+        kxx, kyy = np.meshgrid(kx, kx)  # Cartesian grid
+        krxy = np.sqrt(kxx**2 + kyy**2)  # Radial k-space grid
+        
+        # k-space coordinates of z (distance to spherical cap)
+        z = dk**2 - krxy**2
+        self._kzxy = np.sqrt(np.where(z < 0, 0, z))  # Floor to zero
+        
+        thetaxy = np.arctan2(krxy, self._kzxy)  # angles made with optical axis
+        phixy = np.arctan2(kyy, kxx)  # angles made with a plane transverse the optical axis
+        
+        self._theta_mask = thetaxy < self._angle_of_convergence  # Circular pupil mask
+        
+        # Operators from pupil function to spherical k-space (as in [1])
+        self._Gx = np.sqrt(np.cos(thetaxy)) *\
+            (np.cos(thetaxy) + (1 - np.cos(thetaxy)) * np.sin(phixy)**2) / np.cos(thetaxy)
+            
+        self._Gy = np.sqrt(np.cos(thetaxy)) *\
+            ((np.cos(thetaxy) - 1) * np.cos(phixy) * np.sin(phixy)) / np.cos(thetaxy)
+            
+        self._Gz = -np.sqrt(np.cos(thetaxy)) *\
+            np.sin(thetaxy) * np.cos(phixy) / np.cos(thetaxy)
+        
+        # Plan CZT
+        self._czt = cztw.plan(2, N, w0=-k_bandwidth, w1=k_bandwidth, precision=self._precision)
+    
+    def _run(self, pupil: VectorialPupil, dz: float = 0.0) -> (np.ndarray, np.ndarray, np.ndarray):
+        # Each depth experiences additional free space propagation
+        propagation_tf = np.exp(2j * PI * self._kzxy * dz * self._px_per_m)
+    
+        # x and y components of the pupil
+        l_0x = pupil.x * propagation_tf * self._theta_mask
+        l_0y = pupil.y * propagation_tf * self._theta_mask
+        
+        E_Xx = self._czt(l_0x * self._Gx)
+        E_Xy = self._czt(l_0x * self._Gy)
+        E_Xz = self._czt(-l_0x * self._Gz)
+        
+        # Eqns 21-24 from [2]
+        E_Yx = self._czt(-l_0y * np.rot90(self._Gy))
+        E_Yy = self._czt(l_0y * np.rot90(self._Gx))
+        E_Yz = self._czt(l_0y * np.rot90(self._Gz))
+    
+        E_X = E_Xx + E_Yx
+        E_Y = E_Xy + E_Yy
+        E_Z = E_Xz + E_Yz
+        
+        I_X = np.abs(E_X)**2
+        I_Y = np.abs(E_Y)**2
+        I_Z = np.abs(E_Z)**2
+    
+        return (I_X, I_Y, I_Z)
+
+    
+obj = Objective(WAVELENGTH, 1.33, FOCAL_LENGTH, PUPIL_DIAMETER, N, FOV_WIDTH)
+print(obj._na)
+
+for z in range(100):
+    print(z)
+    obj._run(pupil, z)
+
+sys.exit()
+
 angle_of_convergence = np.arctan(PUPIL_DIAMETER / (2 * FOCAL_LENGTH))
 numerical_aperture = FIELD_INDEX * np.sin(angle_of_convergence)
+
 
 # Pixel size
 px_per_m = N / FOV_WIDTH
@@ -276,10 +383,8 @@ kxx, kyy = np.meshgrid(kx, kx)  # Cartesian grid
 krxy = np.sqrt(kxx**2 + kyy**2)  # Radial k-space grid
 
 # k-space coordinates of z (distance to spherical cap)
-kzxy = np.sqrt(dk**2 - krxy**2)  # Floor to zero
-kzxy[np.isnan(kzxy)] = 0
-# z = dk**2 - krxy**2
-# kzxy = np.sqrt(np.where(z < 0, 0, z))  # Floor to zero
+z = dk**2 - krxy**2
+kzxy = np.sqrt(np.where(z < 0, 0, z))  # Floor to zero
 
 thetaxy = np.arctan2(krxy, kzxy)  # angles made with optical axis
 phixy = np.arctan2(kyy, kxx)  # angles made with a plane transverse the optical axis
