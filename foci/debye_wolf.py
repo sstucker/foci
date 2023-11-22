@@ -6,7 +6,6 @@ References
 [1] Vishniakou, I. & Seelig, J. D. Differentiable optimization of the Debye-Wolf integral for light shaping and adaptive optics in two-photon microscopy. Opt. Express, OE 31, 9526–9542 (2023).
 [2] Boruah, B. R. & Neil, M. A. A. Focal field computation of an arbitrarily polarized beam using fast Fourier transforms. Optics Communications (2009).
 
-
 Created on Thu Nov  9 12:44:28 2023
 
 @author: sstucker
@@ -15,10 +14,15 @@ Created on Thu Nov  9 12:44:28 2023
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 
+from matplotlib import rcParams
+rcParams['font.family'] = 'sans-serif'
+rcParams['font.sans-serif'] = ['Arial']
+rcParams['font.size'] = 8
+
+import cztw
 import numpy as np
 from numpy import pi as PI
-import cztw
-import multiprocessing
+import multiprocessing as mp
 import warnings
 
 
@@ -98,11 +102,15 @@ class VectorialPupil(object):
         if downsample is None:
             downsample = self.n // 16
         
-        extent = (-self._clear_aperture / 2, self._clear_aperture / 2, -self._clear_aperture / 2, self._clear_aperture / 2)        
-        dx = self._x[1] - self._x[0]
+        scaled_aperture = self._clear_aperture / MM
+        
+        extent = np.array([-scaled_aperture / 2, scaled_aperture / 2, -scaled_aperture / 2, scaled_aperture / 2])
+        scaled_x = self._x / MM
+        dx = scaled_x[1] - scaled_x[0]
+        dx = dx / MM
 
         # Quiver plot for polarization direction is downsampled
-        X, Y = np.meshgrid(self._x[::downsample], self._x[::downsample])
+        X, Y = np.meshgrid(scaled_x[::downsample], scaled_x[::downsample])
         u = self.x.real[::downsample, ::downsample]
         v = self.y.real[::downsample, ::downsample]
         a = self.modulus().real[::downsample, ::downsample]
@@ -112,15 +120,15 @@ class VectorialPupil(object):
         ka = self.modulus().imag[::downsample, ::downsample]
 
         mask_im = (np.abs(self.modulus().real) < mask_threshold)
-        for i, x in enumerate(self._x):
-            for j, y in enumerate(self._x):
-                if np.sqrt(x**2 + y**2) > self._clear_aperture / 2:
+        for i, x in enumerate(scaled_x):
+            for j, y in enumerate(scaled_x):
+                if np.sqrt(x**2 + y**2) > scaled_aperture / 2:
                     mask_im[i, j] = True
         mask = ~(mask_im[::downsample, ::downsample])
         
-        plt.figure('Pupil', figsize=(12, 6))
+        plt.figure('Pupil', figsize=(8, 3))
         ax1 = plt.subplot(1, 2, 1)
-        ax1.add_artist(plt.Circle((0, 0), radius=self._clear_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
+        ax1.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
         plt.title('Amplitude')
         ax1.spines['top'].set_visible(False)
         ax1.spines['right'].set_visible(False)
@@ -128,15 +136,15 @@ class VectorialPupil(object):
         ax1.spines['left'].set_visible(False)
         amp = self.modulus().real
         amp[mask_im] = np.nan
-        plt.imshow(amp, extent=extent, cmap='Reds', vmin=0)
+        im = plt.imshow(amp, extent=extent, cmap='Reds', vmin=0)
         ax1.quiver(X[mask], Y[mask], dx * downsample / 6 * u[mask] / a[mask], dx * downsample / 6 * v[mask] / a[mask], color='black', alpha=0.6)
         ax1.set_aspect('equal')
-        ax1.set_xlim(-self._clear_aperture / 1.9, self._clear_aperture / 1.9)
-        ax1.set_ylim(-self._clear_aperture / 1.9, self._clear_aperture / 1.9)
-        plt.colorbar()
+        ax1.set_xlim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
+        ax1.set_ylim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
+        cbar = plt.colorbar(im, fraction=0.02, pad=0.04)
         
         ax2 = plt.subplot(1, 2, 2)
-        ax2.add_artist(plt.Circle((0, 0), radius=self._clear_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
+        ax2.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
         plt.title('Phase')
         ax2.spines['top'].set_visible(False)
         ax2.spines['right'].set_visible(False)
@@ -144,7 +152,7 @@ class VectorialPupil(object):
         ax2.spines['left'].set_visible(False)
         ph = self.modulus().imag % PI
         ph[mask_im] = np.nan
-        plt.imshow(ph, extent=extent, cmap='Blues', vmin=-2*PI, vmax=2*PI)
+        im = plt.imshow(ph, extent=extent, cmap='Blues', vmin=-2*PI, vmax=2*PI)
         for _x, _y, _ku, _kv, _ka in zip(X[mask].flatten(), Y[mask].flatten(), ku[mask].flatten(), kv[mask].flatten(), ka[mask].flatten()):
             dp = np.abs(_ku - _kv) % PI
             tilt = 180/PI * dp / 2 + 45  # degrees
@@ -158,15 +166,61 @@ class VectorialPupil(object):
                     marker='$r$'
                 ax2.scatter([_x], [_y], s=8, color='black', marker=marker)
         ax2.set_aspect('equal')
-        ax2.set_xlim(-self._clear_aperture / 1.9, self._clear_aperture / 1.9)
-        ax2.set_ylim(-self._clear_aperture / 1.9, self._clear_aperture / 1.9)
-        cbar = plt.colorbar()
+        ax2.set_xlim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
+        ax2.set_ylim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
+        ax2.set_yticks([])
+        cbar = plt.colorbar(im, fraction=0.02, pad=0.04)
         cbar.set_ticks([-2*PI, -PI, 0, PI, 2*PI])
         cbar.set_ticklabels(['-2π', '-π', '0', 'π', '2π'])
         plt.tight_layout()
 
 
-# Utility functions
+class VectorialFocalField(object):
+    
+    def __init__(
+        self,
+        shape: tuple,
+        field_depth: float,
+        field_diameter: float,
+        wavelength: float,
+        numerical_aperture: float,
+        precision: str = 'complex128'
+    ):
+        self._wavelength = wavelength
+        self._numerical_aperture = numerical_aperture
+        self._x = np.linspace(-field_diameter / 2, field_diameter / 2, shape[0])
+        self._z = np.linspace(-field_depth / 2, field_depth / 2, shape[-1])
+            
+        self._E = np.empty((*shape, 3), dtype=precision)  # X, Y, and Z field components along last axis
+    
+    def _assign(self, z: int, e_x: np.ndarray, e_y: np.ndarray, e_z: np.ndarray):
+        self._E[:, :, z, 0] = e_x
+        self._E[:, :, z, 1] = e_y
+        self._E[:, :, z, 2] = e_z
+    
+    def intensity(self) -> np.ndarray:
+        """
+        Return the intensity of the focal field (|E_X|^2 + |E_Y|^2+ |E_Z|^2).
+
+        Returns
+        -------
+        np.ndarray
+            Three-dimensional focal field.
+
+        """
+        return np.abs(self._E[:, :, :, 0])**2 + np.abs(self._E[:, :, :, 1])**2 + np.abs(self._E[:, :, :, 2])**2
+    
+    def E_X(self) -> np.ndarray:
+        return self._E[:, :, :, 0]
+    
+    def E_Y(self) -> np.ndarray:
+        return self._E[:, :, :, 1]
+    
+    def E_Z(self) -> np.ndarray:
+        return self._E[:, :, :, 2]
+
+
+# -- Utility functions --------------------------------------------------------
 
 
 def elliptical_polarize(pupil: VectorialPupil, dphase: float=PI/2) -> VectorialPupil:
@@ -219,48 +273,27 @@ def vortical_polarize(pupil: VectorialPupil, angle: float=0) -> VectorialPupil:
     return pupil
 
 
-def ring_beam(N, radius, waist):
-    r = np.linspace(-N / 2, N / 2, N, dtype=np.float64)
-    xc = np.zeros(N)
-    xc[N // 2 - int(radius)] = 1.0
-    xc[N // 2 + int(radius)] = 1.0
-    kernel = np.exp(-(r / waist)**2 / 2)
-    xc = np.convolve(xc, kernel)[N // 2:-N // 2 + 1].astype(np.float64)
-    field = np.zeros((N, N), dtype=np.complex128)
-    for i, x in enumerate(r):
-        for j, y in enumerate(r):
-            field[i, j] = np.interp(np.sqrt(x**2 + y**2), r, xc) + 0j
-    return field + 0j
+# -- Forward model ------------------------------------------------------------
 
 
+def _simulate_plane(kzxy: np.ndarray, dz, px_per_m, pupil_x, pupil_y, czt, Gx, Gy, Gz):
+    # Each depth experiences additional free space propagation
+    propagation_tf = np.exp(2j * PI * kzxy * dz * px_per_m)
 
-
-# Lens parameters
-PUPIL_DIAMETER = 21 * MM
-FOCAL_LENGTH = 8 * MM
-WAVELENGTH = 750 * NM 
-
-# Field parameters
-FOV_WIDTH = 10 * UM
-FOV_DEPTH = 100 * UM
-FIELD_INDEX = 1.33  # Water
-
-# Simulation resolution
-N = 256
-Z = 128
-
-pupil = VectorialPupil(ring_beam(N, N // 3, 1), diameter=PUPIL_DIAMETER)
-# pupil = VectorialPupil(np.zeros((N, N)), pupil_y=np.ones((N, N)), diameter=PUPIL_DIAMETER)
-# pupil = VectorialPupil(np.ones((N, N)), pupil_y=np.zeros((N, N)), diameter=PUPIL_DIAMETER)
-# pupil = VectorialPupil(np.ones((N, N)), pupil_y=np.ones((N, N)), diameter=PUPIL_DIAMETER)
-# pupil.display()
-
-pupil = vortical_polarize(pupil, angle=PI/2)
-# pupil = elliptical_polarize(pupil, dphase=PI/2)
-
-pupil.display()
-
-# %%
+    # x and y components of the pupil
+    l_0x = pupil_x * propagation_tf
+    l_0y = pupil_y * propagation_tf
+    
+    E_Xx = czt(l_0x * Gx)
+    E_Xy = czt(l_0x * Gy)
+    E_Xz = czt(-l_0x * Gz)
+    
+    # Eqns 21-24 from [2]
+    E_Yx = czt(-l_0y * np.rot90(Gy))
+    E_Yy = czt(l_0y * np.rot90(Gx))
+    E_Yz = czt(l_0y * np.rot90(Gz))
+    
+    return (E_Xx + E_Yx, E_Xy + E_Yy, E_Xz + E_Yz)  # Return E_X, E_Y, E_Z
 
 
 class Objective(object):
@@ -274,7 +307,7 @@ class Objective(object):
             pupil_n: int,
             field_diameter: float,
             precision: str = 'complex128'
-         ):
+        ):
         
         if precision in ['single', 'float', 'float32', 'complex64']:
             self._precision = 'complex64'
@@ -293,9 +326,10 @@ class Objective(object):
         
         self._angle_of_convergence = np.arctan(self._pupil_diameter / (2 * self._focal_length))
         self._px_per_m = self._N / self._field_diameter
+        self._m_per_px = self._field_diameter / self._N
         
         # Spatial frequency unit and angular bandwidth
-        k = self._index * 2 * PI / WAVELENGTH  # Wavenumber
+        k = self._index * 2 * PI / self._wavelength  # Wavenumber
         dk = k / (2 * PI) / self._px_per_m
         k_bandwidth = dk * np.sin(self._angle_of_convergence)
         
@@ -307,6 +341,8 @@ class Objective(object):
         # k-space coordinates of z (distance to spherical cap)
         z = dk**2 - krxy**2
         self._kzxy = np.sqrt(np.where(z < 0, 0, z))  # Floor to zero
+        # self._kzxy = np.sqrt(dk**2 - krxy**2)
+        # self._kzxy[np.isnan(self._kzxy)] = 0
         
         thetaxy = np.arctan2(krxy, self._kzxy)  # angles made with optical axis
         phixy = np.arctan2(kyy, kxx)  # angles made with a plane transverse the optical axis
@@ -324,151 +360,28 @@ class Objective(object):
             np.sin(thetaxy) * np.cos(phixy) / np.cos(thetaxy)
         
         # Plan CZT
-        self._czt = cztw.plan(2, N, w0=-k_bandwidth, w1=k_bandwidth, precision=self._precision)
+        self._czt = cztw.plan(2, self._N, w0=-k_bandwidth, w1=k_bandwidth, precision=self._precision)
     
-    def _run(self, pupil: VectorialPupil, dz: float = 0.0) -> (np.ndarray, np.ndarray, np.ndarray):
-        # Each depth experiences additional free space propagation
-        propagation_tf = np.exp(2j * PI * self._kzxy * dz * self._px_per_m)
-    
-        # x and y components of the pupil
-        l_0x = pupil.x * propagation_tf * self._theta_mask
-        l_0y = pupil.y * propagation_tf * self._theta_mask
-        
-        E_Xx = self._czt(l_0x * self._Gx)
-        E_Xy = self._czt(l_0x * self._Gy)
-        E_Xz = self._czt(-l_0x * self._Gz)
-        
-        # Eqns 21-24 from [2]
-        E_Yx = self._czt(-l_0y * np.rot90(self._Gy))
-        E_Yy = self._czt(l_0y * np.rot90(self._Gx))
-        E_Yz = self._czt(l_0y * np.rot90(self._Gz))
-    
-        E_X = E_Xx + E_Yx
-        E_Y = E_Xy + E_Yy
-        E_Z = E_Xz + E_Yz
-        
-        I_X = np.abs(E_X)**2
-        I_Y = np.abs(E_Y)**2
-        I_Z = np.abs(E_Z)**2
-    
-        return (I_X, I_Y, I_Z)
-
-    
-obj = Objective(WAVELENGTH, 1.33, FOCAL_LENGTH, PUPIL_DIAMETER, N, FOV_WIDTH)
-print(obj._na)
-
-for z in range(100):
-    print(z)
-    obj._run(pupil, z)
-
-sys.exit()
-
-angle_of_convergence = np.arctan(PUPIL_DIAMETER / (2 * FOCAL_LENGTH))
-numerical_aperture = FIELD_INDEX * np.sin(angle_of_convergence)
-
-
-# Pixel size
-px_per_m = N / FOV_WIDTH
-dz = FOV_DEPTH / Z
-
-k = FIELD_INDEX * 2 * PI / WAVELENGTH  # Wavenumber
-
-# Spatial frequency unit and angular bandwidth
-dk = k / (2 * PI) / px_per_m
-k_bandwidth = dk * np.sin(angle_of_convergence)
-
-# k-space coordinates of pupil plane
-kx = np.linspace(-k_bandwidth, k_bandwidth, N)
-kxx, kyy = np.meshgrid(kx, kx)  # Cartesian grid
-krxy = np.sqrt(kxx**2 + kyy**2)  # Radial k-space grid
-
-# k-space coordinates of z (distance to spherical cap)
-z = dk**2 - krxy**2
-kzxy = np.sqrt(np.where(z < 0, 0, z))  # Floor to zero
-
-thetaxy = np.arctan2(krxy, kzxy)  # angles made with optical axis
-phixy = np.arctan2(kyy, kxx)  # angles made with a plane transverse the optical axis
-
-theta_mask = thetaxy < angle_of_convergence  # Mask of theta within the pupil
-
-# Real operators from pupil function to spherical k-space (as in [1])
-Gx = np.sqrt(np.cos(thetaxy)) *\
-    (np.cos(thetaxy) + (1 - np.cos(thetaxy)) *
-    np.sin(phixy)**2) / np.cos(thetaxy)
-    
-Gy = np.sqrt(np.cos(thetaxy)) *\
-    ((np.cos(thetaxy) - 1) * np.cos(phixy) *
-    np.sin(phixy)) / np.cos(thetaxy)
-    
-Gz = -np.sqrt(np.cos(thetaxy)) *\
-    np.sin(thetaxy) * np.cos(phixy) / np.cos(thetaxy)
-
-czt = cztw.plan(2, N, w0=-k_bandwidth, w1=k_bandwidth, precision='complex128')
-
-slices = []
-
-if Z > 1:
-    zd = np.linspace(0, FOV_DEPTH / 2, Z // 2 + 1)
-    depths = np.concatenate((-zd[:0:-1], zd[:-1]))
-else:
-    depths = [0]
-
-for dz in depths:
-    
-    # Each depth experiences additional free space propagation
-    propagation_tf = np.exp(2j * PI * kzxy * dz * px_per_m)
-    
-    # x and y components of the pupil
-    l_0x = pupil.x * propagation_tf * theta_mask
-    l_0y = pupil.y * propagation_tf * theta_mask
-    
-    E_Xx = czt(l_0x * Gx)
-    E_Xy = czt(l_0x * Gy)
-    E_Xz = czt(-l_0x * Gz)
-    
-    # Eqns 21-24 from [2]
-    E_Yx = czt(-l_0y * np.rot90(Gy))
-    E_Yy = czt(l_0y * np.rot90(Gx))
-    E_Yz = czt(l_0y * np.rot90(Gz))
-
-    E_X = E_Xx + E_Yx
-    E_Y = E_Xy + E_Yy
-    E_Z = E_Xz + E_Yz
-    
-    I_X = np.abs(E_X)**2
-    I_Y = np.abs(E_Y)**2
-    I_Z = np.abs(E_Z)**2
-    
-    # plt.figure('Debug: I_X, I_Y, I_Z')
-    # plt.subplot(1, 3, 1)
-    # plt.imshow(I_X)
-    # plt.subplot(1, 3, 2)
-    # plt.imshow(I_Y)
-    # plt.subplot(1, 3, 3)
-    # plt.imshow(I_Z)
-
-    intensity = I_X + I_Y + I_Z
-
-    slices.append(intensity)
-    
-psf = np.array(slices)
-
-# %%
-
-plt.figure('PSF')
-ax1 = plt.subplot(1, 2, 1)
-ax1.spines['top'].set_visible(False)
-ax1.spines['right'].set_visible(False)
-ax1.spines['bottom'].set_visible(False)
-ax1.spines['left'].set_visible(False)
-ax1.imshow(psf[Z // 2, :, :], extent=[-FOV_WIDTH / 2, FOV_WIDTH / 2, -FOV_WIDTH / 2, FOV_WIDTH / 2])
-ax2 = plt.subplot(1, 2, 2)
-ax2.imshow(psf[:, N // 2, :], extent=[-FOV_WIDTH / 2, FOV_WIDTH / 2, -FOV_DEPTH / 2, FOV_DEPTH / 2])
-ax2.spines['top'].set_visible(False)
-ax2.spines['right'].set_visible(False)
-ax2.spines['bottom'].set_visible(False)
-ax2.spines['left'].set_visible(False)
-plt.xticks([])
-
-
-
+    def focus(self, pupil: VectorialPupil, n_depths: np.uint = 1, depth_range: tuple = None, multiprocessing=False) -> VectorialFocalField:
+        if n_depths > 1:
+            if depth_range is None:  # Default to same sampling as lateral dimension
+                depth_range = n_depths * self._m_per_px
+            zd = np.linspace(0, depth_range / 2, n_depths // 2 + 1)
+            depths = np.concatenate((-zd[:0:-1], zd[:-1]))
+        else:
+            depths = [0]
+        # todo parallelize
+        field_shape = (self._N, self._N, n_depths)
+        field = VectorialFocalField(field_shape, depth_range, self._field_diameter, self._wavelength, self._na)
+        def worker(dz):
+            return _simulate_plane(self._kzxy, dz, self._px_per_m, pupil.x, pupil.y, self._czt, self._Gx, self._Gy, self._Gz)
+        if multiprocessing:
+            pool = mp.Pool(processes=mp.cpu_count())
+            results = pool.map_async(worker, depths)
+            pool.close()
+            pool.join()
+        else:
+            for z, dz in enumerate(depths):
+                e_x, e_y, e_z = worker(dz)
+                field._assign(z, e_x, e_y, e_z)
+        return field

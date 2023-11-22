@@ -29,7 +29,7 @@ def next_power_of_2(a) -> int:
 
 class CZTW(object):
     
-    def __init__(self, ndim, N, M, w0=-1/2, w1=1/2, precision='double', planner_effort='FFTW_EXHAUSTIVE'):
+    def __init__(self, ndim, N, M, w0=-1/2, w1=1/2, precision='double', planner_effort='FFTW_PATIENT'):
         if precision in ['double, complex128', '128']:
             self._complex_dtype = 'complex128'
             self._real_dtype = 'float64'
