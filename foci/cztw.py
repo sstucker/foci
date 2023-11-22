@@ -12,6 +12,7 @@ CPU-bound version of the implementation in (2).
                         
 [1] Bluestein, Leo I. "A linear filtering approach to the computation of the discrete Fourier transform," Northeast Electronics Research and Engineering Meeting Record 10, 218-219 (1968).
 [2] Vishniakou, I. & Seelig, J. D. "Differentiable optimization of the Debye-Wolf integral for light shaping and adaptive optics in two-photon microscopy". Opt. Express, OE 31, 9526–9542 (2023).
+
 """
 
 import numpy as np

@@ -70,6 +70,10 @@ class VectorialPupil(object):
         return self._clear_aperture
     
     @property
+    def mask(self):
+        return self._aperture_mask
+    
+    @property
     def x(self) -> np.ndarray:
         """Returns x-polarized component of pupil field."""
         return self._pupil[:, :, 0] * self._aperture_mask
