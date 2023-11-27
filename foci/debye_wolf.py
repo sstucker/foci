@@ -17,7 +17,7 @@ from matplotlib.patches import Ellipse
 from matplotlib import rcParams
 rcParams['font.family'] = 'sans-serif'
 rcParams['font.sans-serif'] = ['Arial']
-rcParams['font.size'] = 8
+rcParams['font.size'] = 12
 
 import cztw
 import numpy as np
@@ -92,7 +92,7 @@ class VectorialPupil(object):
     def modulus(self) -> np.ndarray:
         return np.sqrt(self.x**2 + self.y**2)
     
-    def display(self, downsample: int=None, mask_threshold: float=1E-3, display_phase=True, cmap_amp='Reds', cmap_phase='Blues'):
+    def display(self, downsample: int=None, mask_threshold: float=1E-4, display_phase=True, cmap_amp='Reds', cmap_phase='Blues'):
         """
         Display the pupil.
 
@@ -133,7 +133,7 @@ class VectorialPupil(object):
         plt.figure('Pupil')
         ax1 = plt.subplot(1, (1, 2)[int(display_phase)], 1)
         ax1.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
-        plt.title('Pupil amplitude', fontsize=10)
+        plt.title('Pupil amplitude')
         ax1.spines['top'].set_visible(False)
         ax1.spines['right'].set_visible(False)
         ax1.spines['bottom'].set_visible(False)
@@ -149,7 +149,7 @@ class VectorialPupil(object):
         if display_phase:
             ax2 = plt.subplot(1, 2, 2)
             ax2.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
-            plt.title('Pupil phase', fontsize=10)
+            plt.title('Pupil phase')
             ax2.spines['top'].set_visible(False)
             ax2.spines['right'].set_visible(False)
             ax2.spines['bottom'].set_visible(False)

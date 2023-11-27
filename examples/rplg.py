@@ -72,7 +72,7 @@ psf = field.intensity()
 
 # %% Generate figures
 
-pupil.display(downsample=8, cmap_amp='hot', display_phase=False)
+pupil.display(downsample=7, cmap_amp='hot', display_phase=False)
 plt.savefig('rplg-example-pupil')
 
 plt.figure('RP-LG PSF')
