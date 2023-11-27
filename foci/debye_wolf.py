@@ -83,26 +83,37 @@ class VectorialPupil(object):
         """Returns y-polarized component of pupil field."""
         return self._pupil[:, :, 1] * self._aperture_mask
     
+    @property
+    def x_amplitude(self) -> np.ndarray:
+        """Returns x-polarized amplitude of pupil field."""
+        return np.abs(self._pupil[:, :, 0]) * self._aperture_mask
+    
+    @property
+    def y_amplitude(self) -> np.ndarray:
+        """Returns y-polarized amplitude of pupil field."""
+        return np.abs(self._pupil[:, :, 1]) * self._aperture_mask
+
+    @property
+    def x_phase(self) -> np.ndarray:
+        """Returns the phase of the x-polarized component of the pupil field."""
+        return np.angle(self._pupil[:, :, 0]) * self._aperture_mask
+    
+    @property
+    def y_phase(self) -> np.ndarray:
+        """Returns the phase of the y-polarized component of the pupil field."""
+        return np.angle(self._pupil[:, :, 1]) * self._aperture_mask
+    
     def set_x(self, pupil_x: np.ndarray):
         self._pupil[:, :, 0] = pupil_x * self._aperture_mask
     
     def set_y(self, pupil_y: np.ndarray):
         self._pupil[:, :, 1] = pupil_y * self._aperture_mask
     
-    def modulus(self) -> np.ndarray:
-        return np.sqrt(self.x**2 + self.y**2)
+    def intensity(self) -> np.ndarray:
+        return np.real(self.x * np.conj(self.x) + self.y * np.conj(self.y))
     
-    def display(self, downsample: int=None, mask_threshold: float=1E-4, display_phase=True, cmap_amp='Reds', cmap_phase='Blues'):
-        """
-        Display the pupil.
-
-        Parameters
-        ----------
-        downsample : int, optional
-            The downsampled pupil used to draw polarization arrows. If None (default), the pupil polarization is displayed downsampled by factor of 16.
-        mask_threshold : float, optional
-            The magnitude below which the pupil magnitude is not displayed (considered negligible). The default is 1E-2.
-        """
+    def display(self, downsample: int=None, mask_threshold: float=1E-3, display_phase=True, cmap_amp='Reds', cmap_phase='Blues'):
+        
         if downsample is None:
             downsample = self.n // 16
         
@@ -115,15 +126,13 @@ class VectorialPupil(object):
 
         # Quiver plot for polarization direction is downsampled
         X, Y = np.meshgrid(scaled_x[::downsample], scaled_x[::downsample])
-        u = self.x.real[::downsample, ::downsample]
-        v = self.y.real[::downsample, ::downsample]
-        a = self.modulus().real[::downsample, ::downsample]
+        u = self.x_amplitude[::downsample, ::downsample]
+        v = self.y_amplitude[::downsample, ::downsample]
+        a = self.intensity()[::downsample, ::downsample]
+        ku = self.x_phase[::downsample, ::downsample]
+        kv = self.y_phase[::downsample, ::downsample]
 
-        ku = self.x.imag[::downsample, ::downsample]
-        kv = self.y.imag[::downsample, ::downsample]
-        ka = self.modulus().imag[::downsample, ::downsample]
-
-        mask_im = (np.abs(self.modulus().real) < mask_threshold)
+        mask_im = (self.intensity() < mask_threshold)
         for i, x in enumerate(scaled_x):
             for j, y in enumerate(scaled_x):
                 if np.sqrt(x**2 + y**2) > scaled_aperture / 2:
@@ -138,44 +147,16 @@ class VectorialPupil(object):
         ax1.spines['right'].set_visible(False)
         ax1.spines['bottom'].set_visible(False)
         ax1.spines['left'].set_visible(False)
-        amp = self.modulus().real
+        amp = self.intensity()
         amp[mask_im] = np.nan
         im = plt.imshow(amp, extent=extent, cmap=cmap_amp, vmin=0)
-        ax1.quiver(X[mask], Y[mask], dx * downsample / 6 * u[mask] / a[mask], dx * downsample / 6 * v[mask] / a[mask], color='black', alpha=0.6)
+        ax1.quiver(X[mask], Y[mask], dx * downsample / 6 * u[mask], dx * downsample / 6 * v[mask], color='black', alpha=0.6)
         ax1.set_aspect('equal')
         ax1.set_xlim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
         ax1.set_ylim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
-        cbar = plt.colorbar(im, fraction=0.02, pad=0.04)
+        plt.colorbar(im, fraction=0.02, pad=0.04)
         if display_phase:
-            ax2 = plt.subplot(1, 2, 2)
-            ax2.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
-            plt.title('Pupil phase')
-            ax2.spines['top'].set_visible(False)
-            ax2.spines['right'].set_visible(False)
-            ax2.spines['bottom'].set_visible(False)
-            ax2.spines['left'].set_visible(False)
-            ph = self.modulus().imag % PI
-            ph[mask_im] = np.nan
-            im = plt.imshow(ph, extent=extent, cmap=cmap_phase, vmin=-2*PI, vmax=2*PI)
-            for _x, _y, _ku, _kv, _ka in zip(X[mask].flatten(), Y[mask].flatten(), ku[mask].flatten(), kv[mask].flatten(), ka[mask].flatten()):
-                dp = np.abs(_ku - _kv) % PI
-                tilt = 180/PI * dp / 2 + 45  # degrees
-                h = 1
-                w = np.sin(dp)
-                ax2.add_patch(Ellipse((_x, _y), h * dx * downsample / 1.5, w * dx * downsample / 1.5, angle=tilt, facecolor='none', edgecolor='black', linewidth=0.2))
-                if dp > mask_threshold:
-                    if _ku < _kv: # If left-handed
-                        marker='$l$'
-                    else:
-                        marker='$r$'
-                    ax2.scatter([_x], [_y], s=8, color='black', marker=marker)
-            ax2.set_aspect('equal')
-            ax2.set_xlim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
-            ax2.set_ylim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
-            ax2.set_yticks([])
-            cbar = plt.colorbar(im, fraction=0.02, pad=0.04)
-            cbar.set_ticks([-2*PI, -PI, 0, PI, 2*PI])
-            cbar.set_ticklabels(['-2π', '-π', '0', 'π', '2π'])
+            pass
         plt.tight_layout()
 
 

@@ -66,7 +66,7 @@ for waist in waists:
     print('Simulated {} planes, {:.3f} ms per plane, {:.3f} s total.'.format(Z, (elapsed * 1000) / Z, elapsed))
     psf = field.intensity()
     psfs.append(psf)
-    pupil_intensity = pupil.modulus().real
+    pupil_intensity = pupil.intensity()
     pupil_intensity[~pupil.mask] = None
     pupils.append(pupil_intensity)
 
