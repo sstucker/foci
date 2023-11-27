@@ -2,11 +2,9 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-
 import os
 import sys
 import time
-
 
 try:
     from foci import debye_wolf
@@ -53,9 +51,9 @@ print('Precomputing forward model...')
 obj = debye_wolf.Objective(WAVELENGTH, FIELD_INDEX, FOCAL_LENGTH, PUPIL_DIAMETER, N, FIELD_WIDTH)
 print('...simulated objective with NA={:.3f}'.format(obj._na))
 
-# %%
+# %% Calculate PSFs
 
-waists = np.linspace(1, 14, 10)[::-1]
+waists = np.linspace(1, 14, 10)[::-1]  # Gaussian sigma of the annulus in px
 psfs = []
 pupils = []
 
@@ -72,8 +70,7 @@ for waist in waists:
     pupil_intensity[~pupil.mask] = None
     pupils.append(pupil_intensity)
 
-# %%
-
+# %% Display
     
 f = plt.figure('Bessel-Gauss PSFs', figsize=(8, 5))
 for i, (psf, pupil) in enumerate(zip(psfs, pupils)):

@@ -92,14 +92,14 @@ class VectorialPupil(object):
     def modulus(self) -> np.ndarray:
         return np.sqrt(self.x**2 + self.y**2)
     
-    def display(self, downsample: int=None, mask_threshold: float=1E-3):
+    def display(self, downsample: int=None, mask_threshold: float=1E-3, display_phase=True, cmap_amp='Reds', cmap_phase='Blues'):
         """
         Display the pupil.
 
         Parameters
         ----------
         downsample : int, optional
-            The downsampled pupil used to draw polarization arrows. If None (default), the pupil polarization is displayed downsampled by factor of 16..
+            The downsampled pupil used to draw polarization arrows. If None (default), the pupil polarization is displayed downsampled by factor of 16.
         mask_threshold : float, optional
             The magnitude below which the pupil magnitude is not displayed (considered negligible). The default is 1E-2.
         """
@@ -130,52 +130,52 @@ class VectorialPupil(object):
                     mask_im[i, j] = True
         mask = ~(mask_im[::downsample, ::downsample])
         
-        plt.figure('Pupil', figsize=(8, 3))
-        ax1 = plt.subplot(1, 2, 1)
+        plt.figure('Pupil')
+        ax1 = plt.subplot(1, (1, 2)[int(display_phase)], 1)
         ax1.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
-        plt.title('Amplitude')
+        plt.title('Pupil amplitude', fontsize=10)
         ax1.spines['top'].set_visible(False)
         ax1.spines['right'].set_visible(False)
         ax1.spines['bottom'].set_visible(False)
         ax1.spines['left'].set_visible(False)
         amp = self.modulus().real
         amp[mask_im] = np.nan
-        im = plt.imshow(amp, extent=extent, cmap='Reds', vmin=0)
+        im = plt.imshow(amp, extent=extent, cmap=cmap_amp, vmin=0)
         ax1.quiver(X[mask], Y[mask], dx * downsample / 6 * u[mask] / a[mask], dx * downsample / 6 * v[mask] / a[mask], color='black', alpha=0.6)
         ax1.set_aspect('equal')
         ax1.set_xlim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
         ax1.set_ylim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
         cbar = plt.colorbar(im, fraction=0.02, pad=0.04)
-        
-        ax2 = plt.subplot(1, 2, 2)
-        ax2.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
-        plt.title('Phase')
-        ax2.spines['top'].set_visible(False)
-        ax2.spines['right'].set_visible(False)
-        ax2.spines['bottom'].set_visible(False)
-        ax2.spines['left'].set_visible(False)
-        ph = self.modulus().imag % PI
-        ph[mask_im] = np.nan
-        im = plt.imshow(ph, extent=extent, cmap='Blues', vmin=-2*PI, vmax=2*PI)
-        for _x, _y, _ku, _kv, _ka in zip(X[mask].flatten(), Y[mask].flatten(), ku[mask].flatten(), kv[mask].flatten(), ka[mask].flatten()):
-            dp = np.abs(_ku - _kv) % PI
-            tilt = 180/PI * dp / 2 + 45  # degrees
-            h = 1
-            w = np.sin(dp)
-            ax2.add_patch(Ellipse((_x, _y), h * dx * downsample / 1.5, w * dx * downsample / 1.5, angle=tilt, facecolor='none', edgecolor='black', linewidth=0.2))
-            if dp > mask_threshold:
-                if _ku < _kv: # If left-handed
-                    marker='$l$'
-                else:
-                    marker='$r$'
-                ax2.scatter([_x], [_y], s=8, color='black', marker=marker)
-        ax2.set_aspect('equal')
-        ax2.set_xlim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
-        ax2.set_ylim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
-        ax2.set_yticks([])
-        cbar = plt.colorbar(im, fraction=0.02, pad=0.04)
-        cbar.set_ticks([-2*PI, -PI, 0, PI, 2*PI])
-        cbar.set_ticklabels(['-2π', '-π', '0', 'π', '2π'])
+        if display_phase:
+            ax2 = plt.subplot(1, 2, 2)
+            ax2.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
+            plt.title('Pupil phase', fontsize=10)
+            ax2.spines['top'].set_visible(False)
+            ax2.spines['right'].set_visible(False)
+            ax2.spines['bottom'].set_visible(False)
+            ax2.spines['left'].set_visible(False)
+            ph = self.modulus().imag % PI
+            ph[mask_im] = np.nan
+            im = plt.imshow(ph, extent=extent, cmap=cmap_phase, vmin=-2*PI, vmax=2*PI)
+            for _x, _y, _ku, _kv, _ka in zip(X[mask].flatten(), Y[mask].flatten(), ku[mask].flatten(), kv[mask].flatten(), ka[mask].flatten()):
+                dp = np.abs(_ku - _kv) % PI
+                tilt = 180/PI * dp / 2 + 45  # degrees
+                h = 1
+                w = np.sin(dp)
+                ax2.add_patch(Ellipse((_x, _y), h * dx * downsample / 1.5, w * dx * downsample / 1.5, angle=tilt, facecolor='none', edgecolor='black', linewidth=0.2))
+                if dp > mask_threshold:
+                    if _ku < _kv: # If left-handed
+                        marker='$l$'
+                    else:
+                        marker='$r$'
+                    ax2.scatter([_x], [_y], s=8, color='black', marker=marker)
+            ax2.set_aspect('equal')
+            ax2.set_xlim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
+            ax2.set_ylim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
+            ax2.set_yticks([])
+            cbar = plt.colorbar(im, fraction=0.02, pad=0.04)
+            cbar.set_ticks([-2*PI, -PI, 0, PI, 2*PI])
+            cbar.set_ticklabels(['-2π', '-π', '0', 'π', '2π'])
         plt.tight_layout()
 
 
@@ -253,7 +253,7 @@ def elliptical_polarize(pupil: VectorialPupil, dphase: float=PI/2) -> VectorialP
 
 def vortical_polarize(pupil: VectorialPupil, angle: float=0) -> VectorialPupil:
     """
-    Applies vortical polarization to the modulus field of the pupil (existing polarization is lost). 
+    Applies vortical polarization to the x-component of the pupil (existing polarization and y-component are lost). 
 
     Parameters
     ----------
@@ -271,7 +271,9 @@ def vortical_polarize(pupil: VectorialPupil, angle: float=0) -> VectorialPupil:
     n = pupil.n
     xx, yy = np.mgrid[-1:1:n*1j, -1:1:n*1j]
     phi = np.arctan2(xx, yy) + angle
-    p = pupil.modulus()
+    if np.max(pupil.y) > 0:
+        warnings.warn('Y-component lost! vortical_polarize destroys y-component of pupil field.', FociWarning)
+    p = pupil.x
     pupil.set_x(np.cos(phi) * p)
     pupil.set_y(np.sin(phi) * p)
     return pupil
@@ -345,8 +347,6 @@ class Objective(object):
         # k-space coordinates of z (distance to spherical cap)
         z = dk**2 - krxy**2
         self._kzxy = np.sqrt(np.where(z < 0, 0, z))  # Floor to zero
-        # self._kzxy = np.sqrt(dk**2 - krxy**2)
-        # self._kzxy[np.isnan(self._kzxy)] = 0
         
         thetaxy = np.arctan2(krxy, self._kzxy)  # angles made with optical axis
         phixy = np.arctan2(kyy, kxx)  # angles made with a plane transverse the optical axis
