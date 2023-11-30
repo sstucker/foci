@@ -25,6 +25,7 @@ from numpy import pi as PI
 import multiprocessing as mp
 import warnings
 
+mp = mp.get_context('spawn')
 
 MM = 1000.0
 UM = 1.0
@@ -86,12 +87,12 @@ class VectorialPupil(object):
     @property
     def x_amplitude(self) -> np.ndarray:
         """Returns x-polarized amplitude of pupil field."""
-        return np.abs(self._pupil[:, :, 0]) * self._aperture_mask
+        return np.abs(self._pupil[:, :, 0] * np.sign(self._pupil[:, :, 0])) * self._aperture_mask
     
     @property
     def y_amplitude(self) -> np.ndarray:
         """Returns y-polarized amplitude of pupil field."""
-        return np.abs(self._pupil[:, :, 1]) * self._aperture_mask
+        return np.abs(self._pupil[:, :, 1] * np.sign(self._pupil[:, :, 1])) * self._aperture_mask
 
     @property
     def x_phase(self) -> np.ndarray:
@@ -175,8 +176,12 @@ class VectorialFocalField(object):
         self._numerical_aperture = numerical_aperture
         self._x = np.linspace(-field_diameter / 2, field_diameter / 2, shape[0])
         self._z = np.linspace(-field_depth / 2, field_depth / 2, shape[-1])
-            
         self._E = np.empty((*shape, 3), dtype=precision)  # X, Y, and Z field components along last axis
+        self._shape = shape
+    
+    @property
+    def shape(self) -> tuple:
+        return self._shape
     
     def _assign(self, z: int, e_x: np.ndarray, e_y: np.ndarray, e_z: np.ndarray):
         self._E[:, :, z, 0] = e_x
@@ -293,14 +298,16 @@ class Objective(object):
             pupil_diameter: int,
             pupil_n: int,
             field_diameter: float,
-            precision: str = 'complex128'
+            precision: str = 'complex128',
+            multiprocessing: bool = False
         ):
         
         if precision in ['single', 'float', 'float32', 'complex64']:
             self._precision = 'complex64'
         else:
             self._precision = 'complex128'
-        
+        self._multiprocessing = bool(multiprocessing)
+        self._n_processes = mp.cpu_count()
         self._wavelength = wavelength
         self._index = sample_index
         self._focal_length = focal_length
@@ -345,9 +352,12 @@ class Objective(object):
             np.sin(thetaxy) * np.cos(phixy) / np.cos(thetaxy)
         
         # Plan CZT
-        self._czt = cztw.plan(2, self._N, w0=-k_bandwidth, w1=k_bandwidth, precision=self._precision)
+        if self._multiprocessing:
+            self._czt = [cztw.plan(2, self._N, w0=-k_bandwidth, w1=k_bandwidth, precision=self._precision) for _ in range(self._n_processes)]
+        else:
+            self._czt = cztw.plan(2, self._N, w0=-k_bandwidth, w1=k_bandwidth, precision=self._precision)
     
-    def focus(self, pupil: VectorialPupil, n_depths: np.uint = 1, depth_range: tuple = None, multiprocessing=False) -> VectorialFocalField:
+    def focus(self, pupil: VectorialPupil, n_depths: np.uint = 1, depth_range: tuple = None) -> VectorialFocalField:
         if n_depths > 1:
             if depth_range is None:  # Default to same sampling as lateral dimension
                 depth_range = n_depths * self._m_per_px
@@ -358,15 +368,15 @@ class Objective(object):
         # todo parallelize
         field_shape = (self._N, self._N, n_depths)
         field = VectorialFocalField(field_shape, depth_range, self._field_diameter, self._wavelength, self._na)
-        def worker(dz):
-            return _simulate_plane(self._kzxy, dz, self._px_per_m, pupil.x, pupil.y, self._czt, self._Gx, self._Gy, self._Gz)
-        if multiprocessing:
+        def worker(dz, czt):
+            return _simulate_plane(self._kzxy.copy(), dz, self._px_per_m, pupil.x.copy(), pupil.y.copy(), czt, self._Gx.copy(), self._Gy.copy(), self._Gz.copy())
+        if self._multiprocessing:
             pool = mp.Pool(processes=mp.cpu_count())
-            results = pool.map_async(worker, depths)
+            results = pool.map_async(worker, (depths, self._czt))
             pool.close()
             pool.join()
         else:
             for z, dz in enumerate(depths):
-                e_x, e_y, e_z = worker(dz)
+                e_x, e_y, e_z = worker(dz, self._czt)
                 field._assign(z, e_x, e_y, e_z)
         return field

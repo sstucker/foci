@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Simulate radially-polarized Laguerre-Gaussian beams
 

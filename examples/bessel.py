@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Simulate Bessel-Gauss beams with various axial extents and depth profiles
 
 import numpy as np
