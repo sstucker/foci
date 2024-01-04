@@ -19,17 +19,27 @@ rcParams['font.family'] = 'sans-serif'
 rcParams['font.sans-serif'] = ['Arial']
 rcParams['font.size'] = 12
 
+import time
+import os
+
 import cztw
 import numpy as np
 from numpy import pi as PI
 import multiprocessing as mp
 import warnings
+import ctypes
 
 mp = mp.get_context('spawn')
 
 MM = 1000.0
 UM = 1.0
 NM = 1.0 / 1000.0
+
+
+ctype = {
+    'complex64': np.ctypeslib.ndpointer(dtype=np.complex64, ndim=1, flags='C_CONTIGUOUS'),
+    'complex128': np.ctypeslib.ndpointer(dtype=np.complex128, ndim=1, flags='C_CONTIGUOUS')
+}
 
 
 class FociWarning(UserWarning):
@@ -83,6 +93,11 @@ class VectorialPupil(object):
     def y(self) -> np.ndarray:
         """Returns y-polarized component of pupil field."""
         return self._pupil[:, :, 1] * self._aperture_mask
+    
+    @property
+    def xy(self) -> np.ndarray:
+        """Returns both components of the pupil field stacked along the last axis."""
+        return np.stack((self.x, self.y), axis=-1)
     
     @property
     def x_amplitude(self) -> np.ndarray:
@@ -191,7 +206,7 @@ class VectorialFocalField(object):
     def intensity(self) -> np.ndarray:
         """
         Return the intensity of the focal field (|E_X|^2 + |E_Y|^2+ |E_Z|^2).
-
+z
         Returns
         -------
         np.ndarray
@@ -268,13 +283,27 @@ def vortical_polarize(pupil: VectorialPupil, angle: float=0) -> VectorialPupil:
 # -- Forward model ------------------------------------------------------------
 
 
-def _simulate_plane(kzxy: np.ndarray, dz, px_per_m, pupil_x, pupil_y, czt, Gx, Gy, Gz):
+def _worker(done, data, job_queue, result_queue):
+    czt = cztw.plan(**data['cztw_plan_args'])
+    shape = (data['cztw_plan_args']['N'], data['cztw_plan_args']['N'])
+    # print(os.getpid(), 'Planned transform.', flush=True)
+    while not done.is_set():
+        # print(os.getpid(), 'Waiting for work with plan', czt, flush=True)
+        if not job_queue.empty():
+            job = job_queue.get()
+            i = job['i']
+            # print('Job', job['i'], 'received!')
+            E_X, E_Y, E_Z = _simulate_plane(job['pupil'], job['dz'], data['kzxy'], data['px_per_m'], czt, data['Gx'], data['Gy'], data['Gz'])
+            result_queue.put(dict(i=i, e_x=E_X, e_y=E_Y, e_z=E_Z))
+            # print(os.getpid(), 'finished job', i, flush=True)
+
+def _simulate_plane(pupil: np.ndarray, dz: float, kzxy: np.ndarray, px_per_m, czt, Gx, Gy, Gz):
     # Each depth experiences additional free space propagation
     propagation_tf = np.exp(2j * PI * kzxy * dz * px_per_m)
 
     # x and y components of the pupil
-    l_0x = pupil_x * propagation_tf
-    l_0y = pupil_y * propagation_tf
+    l_0x = pupil[:, :, 0] * propagation_tf
+    l_0y = pupil[:, :, 1] * propagation_tf
     
     E_Xx = czt(l_0x * Gx)
     E_Xy = czt(l_0x * Gy)
@@ -306,7 +335,7 @@ class Objective(object):
             self._precision = 'complex64'
         else:
             self._precision = 'complex128'
-        self._multiprocessing = bool(multiprocessing)
+        self._parallelized = bool(multiprocessing)
         self._n_processes = mp.cpu_count()
         self._wavelength = wavelength
         self._index = sample_index
@@ -325,10 +354,10 @@ class Objective(object):
         # Spatial frequency unit and angular bandwidth
         k = self._index * 2 * PI / self._wavelength  # Wavenumber
         dk = k / (2 * PI) / self._px_per_m
-        k_bandwidth = dk * np.sin(self._angle_of_convergence)
+        self._k_bandwidth = dk * np.sin(self._angle_of_convergence)
         
         # k-space coordinates of pupil plane
-        kx = np.linspace(-k_bandwidth, k_bandwidth, self._N)
+        kx = np.linspace(-self._k_bandwidth, self._k_bandwidth, self._N)
         kxx, kyy = np.meshgrid(kx, kx)  # Cartesian grid
         krxy = np.sqrt(kxx**2 + kyy**2)  # Radial k-space grid
         
@@ -351,13 +380,39 @@ class Objective(object):
         self._Gz = -np.sqrt(np.cos(thetaxy)) *\
             np.sin(thetaxy) * np.cos(phixy) / np.cos(thetaxy)
         
-        # Plan CZT
-        if self._multiprocessing:
-            self._czt = [cztw.plan(2, self._N, w0=-k_bandwidth, w1=k_bandwidth, precision=self._precision) for _ in range(self._n_processes)]
-        else:
-            self._czt = cztw.plan(2, self._N, w0=-k_bandwidth, w1=k_bandwidth, precision=self._precision)
+        # Await first call of _prepare_resources to spawn threads and plan ffts
+        self._ready = False
+        self._done = mp.Event()
+        self._czt = None
+        self._job_queue = None
+        self._result_queue = None
+        self._worker_pool = []
     
+    def _setup(self):
+        """The most time-consuming operations carried out the first time an Objective is used to simulate should be here."""
+        if self._parallelized:
+            self._job_queue = mp.Queue()
+            self._result_queue = mp.Queue()
+            for i in range(self._n_processes):
+                init_data = {
+                    'cztw_plan_args': dict(ndim=2, N=self._N, M=None, w0=-self._k_bandwidth, w1=self._k_bandwidth, precision=self._precision),
+                    'kzxy': self._kzxy.copy(),
+                    'px_per_m': self._px_per_m,
+                    'Gx': self._Gx.copy(),
+                    'Gy': self._Gy.copy(),
+                    'Gz': self._Gz.copy()
+                }
+                self._worker_pool.append(mp.Process(target=_worker, args=(self._done, init_data, self._job_queue, self._result_queue)))
+            for process in self._worker_pool:
+                # print('Starting process...')
+                process.start()
+        else:
+            self._czt = cztw.plan(2, self._N, w0=-self._k_bandwidth, w1=self._k_bandwidth, precision=self._precision)
+        self._ready = True
+
     def focus(self, pupil: VectorialPupil, n_depths: np.uint = 1, depth_range: tuple = None) -> VectorialFocalField:
+        if not self._ready:
+            self._setup()
         if n_depths > 1:
             if depth_range is None:  # Default to same sampling as lateral dimension
                 depth_range = n_depths * self._m_per_px
@@ -365,18 +420,26 @@ class Objective(object):
             depths = np.concatenate((-zd[:0:-1], zd[:-1]))
         else:
             depths = [0]
-        # todo parallelize
         field_shape = (self._N, self._N, n_depths)
         field = VectorialFocalField(field_shape, depth_range, self._field_diameter, self._wavelength, self._na)
-        def worker(dz, czt):
-            return _simulate_plane(self._kzxy.copy(), dz, self._px_per_m, pupil.x.copy(), pupil.y.copy(), czt, self._Gx.copy(), self._Gy.copy(), self._Gz.copy())
-        if self._multiprocessing:
-            pool = mp.Pool(processes=mp.cpu_count())
-            results = pool.map_async(worker, (depths, self._czt))
-            pool.close()
-            pool.join()
+        if self._parallelized and n_depths > 1:
+            for i, dz in enumerate(depths):
+                self._job_queue.put(dict(pupil=pupil.xy, dz=dz, i=i))
+            finished_jobs = 0
+            while finished_jobs < len(depths):
+                if not self._result_queue.empty():
+                    result = self._result_queue.get()
+                    field._assign(result['i'], result['e_x'], result['e_y'], result['e_z'])
+                    finished_jobs += 1
+                    # print('Finished', finished_jobs, 'of', len(depths), 'jobs')
+            print(self._result_queue.qsize(), 'jobs left in queue (should be zero!)')
         else:
-            for z, dz in enumerate(depths):
-                e_x, e_y, e_z = worker(dz, self._czt)
-                field._assign(z, e_x, e_y, e_z)
+            for i, dz in enumerate(depths):
+                e_x, e_y, e_z = _simulate_plane(pupil.xy, dz, self._kzxy, self._px_per_m, self._czt, self._Gx, self._Gy, self._Gz)
+                field._assign(i, e_x, e_y, e_z)
         return field
+
+    def __del__(self):
+        for process in self._worker_pool:
+            process.join()
+        self._done.set()
