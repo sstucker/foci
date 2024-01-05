@@ -25,9 +25,9 @@ import os
 import cztw
 import numpy as np
 from numpy import pi as PI
+from multiprocessing import shared_memory as sm
 import multiprocessing as mp
 import warnings
-import ctypes
 
 mp = mp.get_context('spawn')
 
@@ -36,9 +36,9 @@ UM = 1.0
 NM = 1.0 / 1000.0
 
 
-ctype = {
-    'complex64': np.ctypeslib.ndpointer(dtype=np.complex64, ndim=1, flags='C_CONTIGUOUS'),
-    'complex128': np.ctypeslib.ndpointer(dtype=np.complex128, ndim=1, flags='C_CONTIGUOUS')
+type_bytes = {
+    'complex64': 8,
+    'complex128': 16
 }
 
 
@@ -185,13 +185,17 @@ class VectorialFocalField(object):
         field_diameter: float,
         wavelength: float,
         numerical_aperture: float,
-        precision: str = 'complex128'
+        precision: str = 'complex128',
+        field: np.ndarray = None
     ):
         self._wavelength = wavelength
         self._numerical_aperture = numerical_aperture
         self._x = np.linspace(-field_diameter / 2, field_diameter / 2, shape[0])
         self._z = np.linspace(-field_depth / 2, field_depth / 2, shape[-1])
-        self._E = np.empty((*shape, 3), dtype=precision)  # X, Y, and Z field components along last axis
+        if field is None:
+            self._E = np.empty((*shape, 3), dtype=precision)  # X, Y, and Z field components along last axis
+        else:
+            self._E = field
         self._shape = shape
     
     @property
@@ -283,19 +287,40 @@ def vortical_polarize(pupil: VectorialPupil, angle: float=0) -> VectorialPupil:
 # -- Forward model ------------------------------------------------------------
 
 
-def _worker(done, data, job_queue, result_queue):
-    czt = cztw.plan(**data['cztw_plan_args'])
-    shape = (data['cztw_plan_args']['N'], data['cztw_plan_args']['N'])
-    # print(os.getpid(), 'Planned transform.', flush=True)
-    while not done.is_set():
-        # print(os.getpid(), 'Waiting for work with plan', czt, flush=True)
-        if not job_queue.empty():
-            job = job_queue.get()
-            i = job['i']
-            # print('Job', job['i'], 'received!')
-            E_X, E_Y, E_Z = _simulate_plane(job['pupil'], job['dz'], data['kzxy'], data['px_per_m'], czt, data['Gx'], data['Gy'], data['Gz'])
-            result_queue.put(dict(i=i, e_x=E_X, e_y=E_Y, e_z=E_Z))
-            # print(os.getpid(), 'finished job', i, flush=True)
+def _worker(
+    stop_event,
+    work_event,
+    barrier,
+    workload,
+    depths,
+    n,
+    z,
+    precision,
+    pupil_buf_name,
+    field_buf_name,
+    cztw_plan_args,
+    kzxy,
+    px_per_m,
+    Gx,
+    Gy,
+    Gz        
+):
+    # Plan transform
+    czt = cztw.plan(**cztw_plan_args)
+    # Connect to shared memory
+    pupil_buffer = sm.SharedMemory(name=pupil_buf_name, create=False)
+    field_buffer = sm.SharedMemory(name=field_buf_name, create=False)
+    pupil_array = np.ndarray((n, n, 2), dtype=precision, buffer=pupil_buffer.buf)
+    field_array = np.ndarray((n, n, z, 3), dtype=precision, buffer=field_buffer.buf)
+    print(os.getpid(), 'Planned transform. Connected to shared memory.', flush=True)
+    while not stop_event.is_set():  # Main loop
+        if work_event.is_set():
+            for i, dz in zip(workload, depths):
+                field_array[:, :, i, :] = _simulate_plane(pupil_array, dz, kzxy, px_per_m, czt, Gx, Gy, Gz)
+            barrier.wait()
+    pupil_buffer.close()
+    field_buffer.close()
+
 
 def _simulate_plane(pupil: np.ndarray, dz: float, kzxy: np.ndarray, px_per_m, czt, Gx, Gy, Gz):
     # Each depth experiences additional free space propagation
@@ -314,7 +339,7 @@ def _simulate_plane(pupil: np.ndarray, dz: float, kzxy: np.ndarray, px_per_m, cz
     E_Yy = czt(l_0y * np.rot90(Gx))
     E_Yz = czt(l_0y * np.rot90(Gz))
     
-    return (E_Xx + E_Yx, E_Xy + E_Yy, E_Xz + E_Yz)  # Return E_X, E_Y, E_Z
+    return np.stack((E_Xx + E_Yx, E_Xy + E_Yy, E_Xz + E_Yz), axis=-1)  # Return E_X, E_Y, E_Z
 
 
 class Objective(object):
@@ -325,8 +350,10 @@ class Objective(object):
             sample_index: float,
             focal_length: float,
             pupil_diameter: int,
-            pupil_n: int,
+            n: int,
             field_diameter: float,
+            z: int = 1,
+            field_depth: float = None,
             precision: str = 'complex128',
             multiprocessing: bool = False
         ):
@@ -336,12 +363,16 @@ class Objective(object):
         else:
             self._precision = 'complex128'
         self._parallelized = bool(multiprocessing)
-        self._n_processes = mp.cpu_count()
+        if multiprocessing is True:
+            self._n_processes = mp.cpu_count()
+        elif type(multiprocessing) is int:
+            self._n_processes = multiprocessing
         self._wavelength = wavelength
         self._index = sample_index
         self._focal_length = focal_length
         self._pupil_diameter = pupil_diameter        
-        self._N = pupil_n  # Pupil and focal field planar sampling
+        self._N = n  # Pupil and focal field planar sampling
+        self._Z = z  # Depths to compute 
         self._field_diameter = field_diameter
         
         angle_of_convergence = np.arctan(pupil_diameter / (2 * focal_length))
@@ -350,6 +381,16 @@ class Objective(object):
         self._angle_of_convergence = np.arctan(self._pupil_diameter / (2 * self._focal_length))
         self._px_per_m = self._N / self._field_diameter
         self._m_per_px = self._field_diameter / self._N
+        
+        if self._Z > 1:
+            if field_depth is None:  # Default to same sampling as lateral dimension
+                self._field_depth = self._Z * self._m_per_px
+            else:
+                self._field_depth = field_depth
+            zd = np.linspace(0, self._field_depth / 2, self._Z // 2 + 1)
+            self._depths = np.concatenate((-zd[:0:-1], zd[:-1]))
+        else:
+            self._depths = [0]
         
         # Spatial frequency unit and angular bandwidth
         k = self._index * 2 * PI / self._wavelength  # Wavenumber
@@ -381,20 +422,48 @@ class Objective(object):
             np.sin(thetaxy) * np.cos(phixy) / np.cos(thetaxy)
         
         # Await first call of _prepare_resources to spawn threads and plan ffts
-        self._ready = False
-        self._done = mp.Event()
-        self._czt = None
-        self._job_queue = None
-        self._result_queue = None
-        self._worker_pool = []
+        self._ready = False  # True if _setup has run
+        self._pupil_buf_shape = (self._N, self._N, 2)  # The size of the pupil buffer
+        self._field_buf_shape = (self._N, self._N, self._Z, 3)  # The size of the field buffer
+        self._czt = None  # Transform plan in non-parallel mode
+        self._worker_pool = []  # Workers in parallel mode
+        self._work_event = None
+        self._abort_event = None
+        self._worker_barrier = None
+        self._shared_pupil_buf = None  # Shared memory for the pupil. Used to improve performance in parallel mode.  Allocated in setup stage.
+        self._shared_field_buf = None  # Shared memory for the field. Used to improve performance in parallel mode. Allocated in setup stage.
+        self._done = mp.Event()  # Set on cleanup
     
     def _setup(self):
         """The most time-consuming operations carried out the first time an Objective is used to simulate should be here."""
         if self._parallelized:
-            self._job_queue = mp.Queue()
-            self._result_queue = mp.Queue()
-            for i in range(self._n_processes):
-                init_data = {
+            # Set up sync system
+            self._abort_event = mp.Event()
+            self._work_event = mp.Event()
+            self._worker_barrier = mp.Barrier(self._n_processes + 1)
+            # self._worker_barrier = mp.Barrier(self._n_processes + 1)
+            self._shared_pupil_buf = sm.SharedMemory(size=int(np.prod(self._pupil_buf_shape) * type_bytes[self._precision]), create=True)
+            self._shared_field_buf = sm.SharedMemory(size=int(np.prod(self._field_buf_shape) * type_bytes[self._precision]), create=True)
+            self._shared_pupil_array = np.ndarray(self._pupil_buf_shape, dtype=self._precision, buffer=self._shared_pupil_buf.buf)
+            self._shared_field_array = np.ndarray(self._field_buf_shape, dtype=self._precision, buffer=self._shared_field_buf.buf)
+            depths_per_worker = self._Z // self._n_processes
+            workloads = [np.arange(depths_per_worker) + (depths_per_worker * i) for i in range(self._n_processes)]
+            # Give extra jobs to the last worker
+            while workloads[-1][-1] < self._Z - 1:
+                workloads[-1] = np.append(workloads[-1], [workloads[-1][-1] + 1])
+            for i, workload in enumerate(workloads):
+                print('Giving worker', i, 'workload', (tuple(workload), tuple(self._depths[workload])))
+                worker_args = {
+                    'stop_event': self._abort_event,
+                    'work_event': self._work_event,
+                    'barrier': self._worker_barrier,
+                    'workload': tuple(workload),
+                    'depths': tuple(self._depths[workload]),
+                    'n': self._N,
+                    'z': self._Z,
+                    'precision': self._precision,
+                    'pupil_buf_name': self._shared_pupil_buf.name,
+                    'field_buf_name': self._shared_field_buf.name,
                     'cztw_plan_args': dict(ndim=2, N=self._N, M=None, w0=-self._k_bandwidth, w1=self._k_bandwidth, precision=self._precision),
                     'kzxy': self._kzxy.copy(),
                     'px_per_m': self._px_per_m,
@@ -402,44 +471,36 @@ class Objective(object):
                     'Gy': self._Gy.copy(),
                     'Gz': self._Gz.copy()
                 }
-                self._worker_pool.append(mp.Process(target=_worker, args=(self._done, init_data, self._job_queue, self._result_queue)))
-            for process in self._worker_pool:
-                # print('Starting process...')
+                self._worker_pool.append(mp.Process(target=_worker, kwargs=worker_args))
+            for i, process in enumerate(self._worker_pool):
+                print('Starting process', i)
                 process.start()
         else:
             self._czt = cztw.plan(2, self._N, w0=-self._k_bandwidth, w1=self._k_bandwidth, precision=self._precision)
         self._ready = True
 
-    def focus(self, pupil: VectorialPupil, n_depths: np.uint = 1, depth_range: tuple = None) -> VectorialFocalField:
+    def focus(self, pupil: VectorialPupil) -> VectorialFocalField:
         if not self._ready:
             self._setup()
-        if n_depths > 1:
-            if depth_range is None:  # Default to same sampling as lateral dimension
-                depth_range = n_depths * self._m_per_px
-            zd = np.linspace(0, depth_range / 2, n_depths // 2 + 1)
-            depths = np.concatenate((-zd[:0:-1], zd[:-1]))
+        field = VectorialFocalField((self._N, self._N, self._Z), self._field_depth, self._field_diameter, self._wavelength, self._na)
+        if self._parallelized and self._Z > 1:
+            np.copyto(self._shared_pupil_array, pupil.xy)
+            self._work_event.set()
+            while self._worker_barrier.n_waiting < self._n_processes:
+                pass
+            self._work_event.clear()
+            self._worker_barrier.wait()  # Releases workers
+            np.copyto(field._E, self._shared_field_array)
         else:
-            depths = [0]
-        field_shape = (self._N, self._N, n_depths)
-        field = VectorialFocalField(field_shape, depth_range, self._field_diameter, self._wavelength, self._na)
-        if self._parallelized and n_depths > 1:
-            for i, dz in enumerate(depths):
-                self._job_queue.put(dict(pupil=pupil.xy, dz=dz, i=i))
-            finished_jobs = 0
-            while finished_jobs < len(depths):
-                if not self._result_queue.empty():
-                    result = self._result_queue.get()
-                    field._assign(result['i'], result['e_x'], result['e_y'], result['e_z'])
-                    finished_jobs += 1
-                    # print('Finished', finished_jobs, 'of', len(depths), 'jobs')
-            print(self._result_queue.qsize(), 'jobs left in queue (should be zero!)')
-        else:
-            for i, dz in enumerate(depths):
-                e_x, e_y, e_z = _simulate_plane(pupil.xy, dz, self._kzxy, self._px_per_m, self._czt, self._Gx, self._Gy, self._Gz)
-                field._assign(i, e_x, e_y, e_z)
+            for i, dz in enumerate(self._depths):
+                e = _simulate_plane(pupil.xy, dz, self._kzxy, self._px_per_m, self._czt, self._Gx, self._Gy, self._Gz)
+                field._assign(i, e[:, :, 0], e[:, :, 1], e[:, :, 2])
         return field
 
     def __del__(self):
-        for process in self._worker_pool:
-            process.join()
-        self._done.set()
+        if self._parallelized:
+            self._abort_event.set()
+            for process in self._worker_pool:
+                process.join()
+            self._shared_field_buf.unlink()
+            self._shared_pupil_buf.unlink()

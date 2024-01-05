@@ -51,7 +51,7 @@ if __name__ == '__main__':
     Z = 128
     
     print('Precomputing forward model...')
-    obj = debye_wolf.Objective(WAVELENGTH, FIELD_INDEX, FOCAL_LENGTH, PUPIL_DIAMETER, N, FIELD_WIDTH, multiprocessing=True)
+    obj = debye_wolf.Objective(WAVELENGTH, FIELD_INDEX, FOCAL_LENGTH, PUPIL_DIAMETER, N, FIELD_WIDTH, z=Z, field_depth=FIELD_DEPTH, multiprocessing=True, precision='complex64')
     print('...simulated objective with NA={:.3f}'.format(obj._na))
     
     # %% Calculate PSFs
@@ -60,11 +60,11 @@ if __name__ == '__main__':
     psfs = []
     pupils = []
     
-    for waist in waists:
+    for waist in waists[::-1]:
         # Generate linearly-polarized annular pupil
         pupil = debye_wolf.VectorialPupil(ring_beam(N, N // 4, waist), diameter=PUPIL_DIAMETER)
         start = time.time()
-        field = obj.focus(pupil, Z, FIELD_DEPTH)
+        field = obj.focus(pupil)
         elapsed = time.time() - start
         print('Simulated {} planes, {:.3f} ms per plane, {:.3f} s total.'.format(Z, (elapsed * 1000) / Z, elapsed))
         psf = field.intensity()
