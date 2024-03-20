@@ -24,36 +24,36 @@ except ModuleNotFoundError:  # If not installed, assume user is running from \ex
     from foci import UM, NM, MM
 
 
-def gauss2d(n, waist):
+def gauss2d2(n, waist1, waist2):
     """Return a 2D gaussian profile with 1/e distance `waist`"""
     r = np.linspace(-n / 2, n / 2, n)
     xx, yy = np.meshgrid(r, r)
-    return np.exp((-2 * np.sqrt(xx**2 + yy**2)**2) / waist**2)
+    return 1 / (2 * np.pi * waist1 * waist2) * np.exp(-(xx**2 / (2 * waist1**2) + yy** 2 / (2 * waist2**2)))
     
 
 # %% Generate objective forward model
 
 # Lens parameters
-PUPIL_DIAMETER = 15 * MM
-FOCAL_LENGTH = 14.85 * MM
-WAVELENGTH = 920 * NM
+PUPIL_DIAMETER = 20 * MM
+FOCAL_LENGTH = 12.5 * MM
+WAVELENGTH = 1035 * NM
 
 # Field parameters
-FIELD_WIDTH = 10 * UM
+FIELD_WIDTH = 200 * UM
 FIELD_DEPTH = 10 * UM
-FIELD_INDEX = 1.4  # Oil
+FIELD_INDEX = 1.33  # Water
 
 # Simulation resolution
-N = 256
-Z = 256
+N = 512
+Z = 64
 
-print('Precomputing forward model of Olympus 10X Objective...')
+print('Precomputing forward model of Nikon 16X Objective...')
 obj = debye_wolf.Objective(WAVELENGTH, FIELD_INDEX, FOCAL_LENGTH, PUPIL_DIAMETER, N, FIELD_WIDTH, z=Z, field_depth=FIELD_DEPTH)
 print('...simulated objective with NA={:.3f}'.format(obj._na))
 
 # %% Create linearly polarized pupil
 
-pupil_intensity = gauss2d(N, N // 2)
+pupil_intensity = gauss2d2(N, N * 2, N / 256)
 pupil = debye_wolf.VectorialPupil(pupil_x=pupil_intensity, diameter=PUPIL_DIAMETER)
 
 # %% Calculate field
@@ -66,7 +66,7 @@ psf = field.intensity()
 
 # %% Display
 
-plt.figure('Gaussian pupil and field')
+plt.figure('Elliptical gaussian pupil and field')
 ax1 = plt.subplot(1, 3, 1)
 plt.title('Pupil')
 ax1.imshow(pupil_intensity)
