@@ -28,7 +28,7 @@ except ModuleNotFoundError:  # If not installed, assume user is running from \ex
 
 
 def lgbeam(r, p, beta, pupil_diameter):
-    """Laguerre-Gaussian beam as in [1]"""
+    """Laguerre-Gaussian beam as in [1]."""
     D4sigma = pupil_diameter / beta
     w0 = D4sigma / (2 * np.sqrt(2*p + 2))
     return r/w0 * np.exp(-r**2/w0**2) * L(p, 1)((2*r**2) / w0**2)
@@ -51,7 +51,7 @@ N = 256
 Z = 256
 
 print('Precomputing forward model of Olympus UPLSAPO 100XO...')
-obj = debye_wolf.Objective(WAVELENGTH, FIELD_INDEX, FOCAL_LENGTH, PUPIL_DIAMETER, N, FIELD_WIDTH)
+obj = debye_wolf.Objective(WAVELENGTH, FIELD_INDEX, FOCAL_LENGTH, PUPIL_DIAMETER, N, FIELD_WIDTH, z=Z, field_depth=FIELD_DEPTH)
 print('...simulated objective with NA={:.3f}'.format(obj._na))
 
 # %% Calculate 3rd order radially-polarized Laguerre-Gaussian pupil
@@ -66,14 +66,14 @@ pupil = debye_wolf.VectorialPupil(pupil_x=pupil_x, diameter=PUPIL_DIAMETER)
 pupil = debye_wolf.vortical_polarize(pupil, angle=0)
 
 start = time.time()
-field = obj.focus(pupil, Z, FIELD_DEPTH)
+field = obj.focus(pupil)
 elapsed = time.time() - start
 print('Simulated {} planes, {:.3f} ms per plane, {:.3f} s total.'.format(Z, (elapsed * 1000) / Z, elapsed))
 psf = field.intensity()
 
 # %% Generate figures
 
-pupil.display(downsample=7, cmap_amp='hot', display_phase=False)
+pupil.display(polarization_downsample=6, cmap_amp='hot', display_phase=False)
 plt.savefig('rplg-example-pupil')
 
 plt.figure('RP-LG PSF')

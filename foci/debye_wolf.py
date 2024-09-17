@@ -102,12 +102,12 @@ class VectorialPupil(object):
     @property
     def x_amplitude(self) -> np.ndarray:
         """Returns x-polarized amplitude of pupil field."""
-        return np.abs(self._pupil[:, :, 0] * np.sign(self._pupil[:, :, 0])) * self._aperture_mask
+        return self._pupil[:, :, 0] * self._aperture_mask
     
     @property
     def y_amplitude(self) -> np.ndarray:
         """Returns y-polarized amplitude of pupil field."""
-        return np.abs(self._pupil[:, :, 1] * np.sign(self._pupil[:, :, 1])) * self._aperture_mask
+        return self._pupil[:, :, 1] * self._aperture_mask
 
     @property
     def x_phase(self) -> np.ndarray:
@@ -128,11 +128,13 @@ class VectorialPupil(object):
     def intensity(self) -> np.ndarray:
         return np.real(self.x * np.conj(self.x) + self.y * np.conj(self.y))
     
-    def display(self, downsample: int=None, mask_threshold: float=1E-3, display_phase=True, cmap_amp='Reds', cmap_phase='Blues'):
+    def display(self, mask_threshold: float=1E-9, display_phase=True, display_polarization=True, polarization_downsample: int=None, cmap_amp='Reds', cmap_phase='Blues', display_colorbar=False):
         
-        if downsample is None:
+        if polarization_downsample is None:
             downsample = self.n // 16
-        
+        else:
+            downsample = polarization_downsample
+
         scaled_aperture = self._clear_aperture / MM
         
         extent = np.array([-scaled_aperture / 2, scaled_aperture / 2, -scaled_aperture / 2, scaled_aperture / 2])
@@ -140,15 +142,9 @@ class VectorialPupil(object):
         dx = scaled_x[1] - scaled_x[0]
         dx = dx / MM
 
-        # Quiver plot for polarization direction is downsampled
-        X, Y = np.meshgrid(scaled_x[::downsample], scaled_x[::downsample])
-        u = self.x_amplitude[::downsample, ::downsample]
-        v = self.y_amplitude[::downsample, ::downsample]
-        a = self.intensity()[::downsample, ::downsample]
-        ku = self.x_phase[::downsample, ::downsample]
-        kv = self.y_phase[::downsample, ::downsample]
+        amp = self.intensity()
 
-        mask_im = (self.intensity() < mask_threshold)
+        mask_im = (amp / np.max(amp) < mask_threshold)
         for i, x in enumerate(scaled_x):
             for j, y in enumerate(scaled_x):
                 if np.sqrt(x**2 + y**2) > scaled_aperture / 2:
@@ -158,19 +154,28 @@ class VectorialPupil(object):
         plt.figure('Pupil')
         ax1 = plt.subplot(1, (1, 2)[int(display_phase)], 1)
         ax1.add_artist(plt.Circle((0, 0), radius=scaled_aperture / 2, fill=None, linewidth=3, edgecolor='white'))
-        plt.title('Pupil amplitude')
         ax1.spines['top'].set_visible(False)
         ax1.spines['right'].set_visible(False)
         ax1.spines['bottom'].set_visible(False)
         ax1.spines['left'].set_visible(False)
-        amp = self.intensity()
         amp[mask_im] = np.nan
         im = plt.imshow(amp, extent=extent, cmap=cmap_amp, vmin=0)
-        ax1.quiver(X[mask], Y[mask], dx * downsample / 6 * u[mask], dx * downsample / 6 * v[mask], color='black', alpha=0.6)
+        if display_polarization:
+            plt.title('Pupil amplitude & polarization')
+            X, Y = np.meshgrid(scaled_x[::downsample], scaled_x[::downsample])
+            u = self.x_amplitude[::downsample, ::downsample]
+            v = self.y_amplitude[::downsample, ::downsample]
+            a = self.intensity()[::downsample, ::downsample]
+            ku = self.x_phase[::downsample, ::downsample]
+            kv = self.y_phase[::downsample, ::downsample]
+            ax1.quiver(X[mask], Y[mask], dx * downsample / 6 * u[mask], dx * downsample / 6 * v[mask], color='black', alpha=0.6)
+        else:
+            plt.title('Pupil amplitude')
         ax1.set_aspect('equal')
         ax1.set_xlim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
         ax1.set_ylim(-scaled_aperture / 1.9, scaled_aperture / 1.9)
-        plt.colorbar(im, fraction=0.02, pad=0.04)
+        if display_colorbar:
+            plt.colorbar(im, fraction=0.02, pad=0.04)
         if display_phase:
             pass
         plt.tight_layout()
@@ -390,6 +395,7 @@ class Objective(object):
             zd = np.linspace(0, self._field_depth / 2, self._Z // 2 + 1)
             self._depths = np.concatenate((-zd[:0:-1], zd[:-1]))
         else:
+            self._field_depth = 0
             self._depths = [0]
         
         # Spatial frequency unit and angular bandwidth
@@ -435,7 +441,7 @@ class Objective(object):
         self._done = mp.Event()  # Set on cleanup
     
     def _setup(self):
-        """The most time-consuming operations carried out the first time an Objective is used to simulate should be here."""
+        # The most time-consuming operations carried out the first time an Objective is used should be here
         if self._parallelized:
             # Set up sync system
             self._abort_event = mp.Event()
