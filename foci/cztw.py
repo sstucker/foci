@@ -20,8 +20,7 @@ from numpy import pi as PI
 import pyfftw as fftw
 import os
 
-
-wisdom_path = os.path.join(os.getcwd(), 'wisdom')  # todo save this in module directory
+from foci.util import *
 
 
 def next_power_of_2(a) -> int:
@@ -68,12 +67,8 @@ class CZTW(object):
         self._V = np.fft.fft(v_n)
         self._g = W**(k**2/2)
         
-        wisdom = []
-        if os.path.exists(wisdom_path):
-            with open(wisdom_path, 'rb') as f:
-                for line in f:
-                    wisdom.append(line)
-            fftw.import_wisdom(wisdom)
+        import_fftw_wisdom()
+        
         if ndim == 2:
             # if N != M, the FFT changes size across the 2nd axis and 4 transforms/arrays must be planned.
             self._transform_shape = (M, L)
@@ -99,11 +94,9 @@ class CZTW(object):
             self._fft_fwd(self._x)
             self._fft_Bwd(self._X)
             self.czt = self._czt1
-        wisdom = fftw.export_wisdom()
-        with open(wisdom_path, 'wb') as f:
-            for line in wisdom:
-                f.write(line)
             
+        export_fftw_wisdom()
+
     def __call__(self, x: np.ndarray):
         # if x.shape != self._input_shape:
         #     raise ValueError('Invalid input shape {} for CZTW plan with input shape {}'.format(x.shape, self._input_shape))
@@ -130,6 +123,8 @@ class CZTW(object):
         self._x2 = self._fft_bwd_j(self._V * self._X2)
         return np.transpose(self._x2[:, :self._M] * self._g)
     
+    def __del__(self):
+        export_fftw_wisdom()
 
 def plan(ndim, N, M=None, w0=-1/2, w1=1/2, precision='double') -> CZTW:
     if M is None:

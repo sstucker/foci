@@ -2,7 +2,6 @@
 """
 Forward model for focusing of an arbitrary vectorial field by a high NA objective
 
-References
 [1] Vishniakou, I. & Seelig, J. D. Differentiable optimization of the Debye-Wolf integral for light shaping and adaptive optics in two-photon microscopy. Opt. Express, OE 31, 9526–9542 (2023).
 [2] Boruah, B. R. & Neil, M. A. A. Focal field computation of an arbitrarily polarized beam using fast Fourier transforms. Optics Communications (2009).
 
@@ -22,14 +21,16 @@ rcParams['font.size'] = 12
 import time
 import os
 
-import cztw
+from foci import cztw
 import numpy as np
 from numpy import pi as PI
 from multiprocessing import shared_memory as sm
 import multiprocessing as mp
 import warnings
 
+
 mp = mp.get_context('spawn')
+
 
 MM = 1000.0
 UM = 1.0
@@ -68,13 +69,14 @@ class VectorialPupil(object):
             self._pupil[:, :, 1] = 0.0 + 0.0j
         else:
             self._pupil[:, :, 1] = pupil_y
-        
-    def __getitem__(self, slice):
-        return self._pupil.__getitem__(slice)
     
     @property
     def n(self):
         return self._shape[0]
+    
+    @property
+    def shape(self):
+        return self._shape
     
     @property
     def clear_aperture(self):
@@ -347,7 +349,7 @@ def _simulate_plane(pupil: np.ndarray, dz: float, kzxy: np.ndarray, px_per_m, cz
     return np.stack((E_Xx + E_Yx, E_Xy + E_Yy, E_Xz + E_Yz), axis=-1)  # Return E_X, E_Y, E_Z
 
 
-class Objective(object):
+class VectorialObjective(object):
     
     def __init__(
             self,
@@ -510,3 +512,6 @@ class Objective(object):
                 process.join()
             self._shared_field_buf.unlink()
             self._shared_pupil_buf.unlink()
+            
+            
+Objective = VectorialObjective  # Alias for VectorialObjective class

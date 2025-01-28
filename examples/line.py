@@ -44,8 +44,8 @@ FIELD_DEPTH = 10 * UM
 FIELD_INDEX = 1.33  # Water
 
 # Simulation resolution
-N = 512
-Z = 64
+N = 256
+Z = 32
 
 print('Precomputing forward model of Nikon 16X Objective...')
 obj = debye_wolf.Objective(WAVELENGTH, FIELD_INDEX, FOCAL_LENGTH, PUPIL_DIAMETER, N, FIELD_WIDTH, z=Z, field_depth=FIELD_DEPTH)
