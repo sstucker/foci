@@ -43,8 +43,6 @@ def axicon(N, L, λ, θ, index, thickness, curvature=0):
     x, y = np.meshgrid(r, r)
     rr = np.sqrt(x**2 + y**2)
     return np.exp(1j * k * (index - 1.0) * (np.sqrt(rr**2 + curvature**2) - curvature) * np.tan(θ))
-    # return np.exp(1j * k * index * (np.sqrt(curvature**2 + (x**2 + y**2) / np.tan(θ / 2)**2) - curvature))
-    # return np.exp(1j * k * index * thickness) * np.exp(1j * k * (1.0 - index) * np.sqrt(curvature**2 + (x**2 + y**2) / np.tan(θ / 2)**2))
 
 def thin_lens(N, L, λ, f):
     dx = L / N

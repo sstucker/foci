@@ -21,12 +21,14 @@ rcParams['font.size'] = 12
 import time
 import os
 
+import copy
 from foci import cztw
 import numpy as np
 from numpy import pi as PI
 from multiprocessing import shared_memory as sm
 import multiprocessing as mp
 import warnings
+import poppy.zernike
 
 
 mp = mp.get_context('spawn')
@@ -57,10 +59,10 @@ class VectorialPupil(object):
             self._clear_aperture = float(pupil_x.shape[0])
         else:
             self._clear_aperture = diameter
-        self._x = np.linspace(-self._clear_aperture / 2, self._clear_aperture / 2, self._shape[0])
+        self._r = np.linspace(-self._clear_aperture / 2, self._clear_aperture / 2, self._shape[0])
         self._aperture_mask = np.zeros((self.n, self.n), dtype=int)  # todo other aperture shapes?
-        for i, x in enumerate(self._x):
-            for j, y in enumerate(self._x):
+        for i, x in enumerate(self._r):
+            for j, y in enumerate(self._r):
                 if np.sqrt(x**2 + y**2) < self._clear_aperture / 2:
                     self._aperture_mask[i, j] = 1.0
         self._pupil = np.zeros((self._shape), dtype=dtype)
@@ -73,6 +75,18 @@ class VectorialPupil(object):
     @property
     def n(self):
         return self._shape[0]
+    
+    @property
+    def r(self):
+        return self._r
+    
+    def rgrid(self):
+        x, y = np.meshgrid(self.r, self.r)
+        return np.sqrt(x**2 + y**2)
+        
+    def azimgrid(self):
+        x, y = np.meshgrid(self.r, self.r)
+        return np.arctan2(y, x)
     
     @property
     def shape(self):
@@ -140,7 +154,7 @@ class VectorialPupil(object):
         scaled_aperture = self._clear_aperture / MM
         
         extent = np.array([-scaled_aperture / 2, scaled_aperture / 2, -scaled_aperture / 2, scaled_aperture / 2])
-        scaled_x = self._x / MM
+        scaled_x = self._r / MM
         dx = scaled_x[1] - scaled_x[0]
         dx = dx / MM
 
@@ -197,7 +211,7 @@ class VectorialFocalField(object):
     ):
         self._wavelength = wavelength
         self._numerical_aperture = numerical_aperture
-        self._x = np.linspace(-field_diameter / 2, field_diameter / 2, shape[0])
+        self._r = np.linspace(-field_diameter / 2, field_diameter / 2, shape[0])
         self._z = np.linspace(-field_depth / 2, field_depth / 2, shape[-1])
         if field is None:
             self._E = np.empty((*shape, 3), dtype=precision)  # X, Y, and Z field components along last axis
@@ -208,6 +222,10 @@ class VectorialFocalField(object):
     @property
     def shape(self) -> tuple:
         return self._shape
+    
+    @property
+    def r(self) -> np.ndarray:
+        return self._r
     
     def _assign(self, z: int, e_x: np.ndarray, e_y: np.ndarray, e_z: np.ndarray):
         self._E[:, :, z, 0] = e_x
@@ -238,6 +256,16 @@ z
 
 # -- Utility functions --------------------------------------------------------
 
+def aberrate_spherical(pupil: VectorialPupil, waves: float):
+    pupil = copy.deepcopy(pupil)
+    r = pupil.rgrid()
+    rho = r / np.max(r)
+    phi_z = poppy.zernike.zernike(4, 0, rho=rho, theta=pupil.azimgrid())
+    phi_z = (phi_z - np.min(phi_z)) / (np.max(phi_z) - np.min(phi_z))  # Normalize so peak-to-peak amplitude is 1
+    print(np.min(phi_z), np.max(phi_z))
+    pupil._pupil[:, :, 0] *= np.exp(1j * 2 * PI * waves * phi_z)
+    pupil._pupil[:, :, 1] *= np.exp(1j * 2 * PI * waves * phi_z)
+    return pupil
 
 def elliptical_polarize(pupil: VectorialPupil, dphase: float=PI/2) -> VectorialPupil:
     """
@@ -256,6 +284,7 @@ def elliptical_polarize(pupil: VectorialPupil, dphase: float=PI/2) -> VectorialP
         The polarized pupil instance.
 
     """
+    pupil = copy.deepcopy(pupil)
     shifted = pupil.x * np.exp(1j * dphase)
     pupil.set_x(shifted)
     if np.max(pupil.y.real) == 0 or np.max(pupil.x.real) == 0:
@@ -280,6 +309,7 @@ def vortical_polarize(pupil: VectorialPupil, angle: float=0) -> VectorialPupil:
         The polarized pupil instance.
 
     """
+    pupil = copy.deepcopy(pupil)
     n = pupil.n
     xx, yy = np.mgrid[-1:1:n*1j, -1:1:n*1j]
     phi = np.arctan2(xx, yy) + angle
