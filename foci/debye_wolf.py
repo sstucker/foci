@@ -18,9 +18,12 @@ rcParams['font.family'] = 'sans-serif'
 rcParams['font.sans-serif'] = ['Arial']
 rcParams['font.size'] = 12
 
+from datetime import datetime
 import time
 import os
-
+import glob
+import tempfile
+import uuid
 import copy
 from foci import cztw
 import numpy as np
@@ -28,7 +31,7 @@ from numpy import pi as PI
 from multiprocessing import shared_memory as sm
 import multiprocessing as mp
 import warnings
-import poppy.zernike
+import prysm.polynomials
 
 
 mp = mp.get_context('spawn')
@@ -205,19 +208,29 @@ class VectorialFocalField(object):
         field_depth: float,
         field_diameter: float,
         wavelength: float,
-        numerical_aperture: float,
         precision: str = 'complex128',
         field: np.ndarray = None
     ):
         self._wavelength = wavelength
-        self._numerical_aperture = numerical_aperture
         self._r = np.linspace(-field_diameter / 2, field_diameter / 2, shape[0])
         self._z = np.linspace(-field_depth / 2, field_depth / 2, shape[-1])
+        self._filename = None  # for memmaped fields
+        now_str = datetime.now().strftime("%Y%m%d%H%M%S")
+        param_str = str(int(wavelength / NM)) + '_' + '_'.join(str(i) for i in shape) + '_' + precision
+        self._filename = os.path.join(os.getcwd(), 'psf_' + param_str + now_str)
         if field is None:
-            self._E = np.empty((*shape, 3), dtype=precision)  # X, Y, and Z field components along last axis
+            try:
+                self._E = np.empty((*shape, 3), dtype=precision)  # X, Y, and Z field components along last axis
+            except MemoryError:
+                self._E = np.memmap(filename=self._filename, mode='w+', shape=(*shape, 3), dtype=precision)
         else:
             self._E = field
         self._shape = shape
+    
+    def _assign(self, z: int, e_x: np.ndarray, e_y: np.ndarray, e_z: np.ndarray):
+        self._E[:, :, z, 0] = e_x
+        self._E[:, :, z, 1] = e_y
+        self._E[:, :, z, 2] = e_z
     
     @property
     def shape(self) -> tuple:
@@ -226,11 +239,6 @@ class VectorialFocalField(object):
     @property
     def r(self) -> np.ndarray:
         return self._r
-    
-    def _assign(self, z: int, e_x: np.ndarray, e_y: np.ndarray, e_z: np.ndarray):
-        self._E[:, :, z, 0] = e_x
-        self._E[:, :, z, 1] = e_y
-        self._E[:, :, z, 2] = e_z
     
     def intensity(self) -> np.ndarray:
         """
@@ -252,20 +260,39 @@ z
     
     def E_Z(self) -> np.ndarray:
         return self._E[:, :, :, 2]
+    
+    def save_vectorial(self, f=None):
+        if f is None:
+            print('Writing vectorial field data to', self._filename + '.npy')
+            np.save(self._filename, self._E)
+        else:
+            print('Writing vectorial field data to', f)
+            np.save(f, self._E)
+    
+    def save_intensity(self, f=None):
+        if f is None:
+            print('Writing field intensity data to', self._filename + '.npy')
+            np.save(self._filename, self.intensity())
+        else:
+            print('Writing field intensity data to', f)
+            np.save(f, self.intensity())
 
 
 # -- Utility functions --------------------------------------------------------
 
-def aberrate_spherical(pupil: VectorialPupil, waves: float):
+
+def zernike_phase_mask(pupil: VectorialPupil, n: int, m: int, waves_rms: float):
     pupil = copy.deepcopy(pupil)
-    r = pupil.rgrid()
-    rho = r / np.max(r)
-    phi_z = poppy.zernike.zernike(4, 0, rho=rho, theta=pupil.azimgrid())
-    phi_z = (phi_z - np.min(phi_z)) / (np.max(phi_z) - np.min(phi_z))  # Normalize so peak-to-peak amplitude is 1
-    print(np.min(phi_z), np.max(phi_z))
-    pupil._pupil[:, :, 0] *= np.exp(1j * 2 * PI * waves * phi_z)
-    pupil._pupil[:, :, 1] *= np.exp(1j * 2 * PI * waves * phi_z)
+    r = np.linspace(-1, 1, pupil.n)
+    x, y = np.meshgrid(r, r)
+    r_unit_grid = np.sqrt(x**2 + y**2)
+    phi = prysm.polynomials.zernike_nm(n, m, r_unit_grid, pupil.azimgrid(), norm=True)
+    phi = np.nan_to_num(phi)
+    phi[r_unit_grid > 1] = 0.0
+    pupil._pupil[:, :, 0] = pupil._pupil[:, :, 0] * np.exp(1j * waves_rms * 2 * PI * phi)
+    pupil._pupil[:, :, 1] = pupil._pupil[:, :, 1] * np.exp(1j * waves_rms * 2 * PI * phi)
     return pupil
+
 
 def elliptical_polarize(pupil: VectorialPupil, dphase: float=PI/2) -> VectorialPupil:
     """
@@ -328,13 +355,12 @@ def _worker(
     stop_event,
     work_event,
     barrier,
-    workload,
     depths,
     n,
     z,
     precision,
     pupil_buf_name,
-    field_buf_name,
+    field_output_file,
     cztw_plan_args,
     kzxy,
     px_per_m,
@@ -346,17 +372,18 @@ def _worker(
     czt = cztw.plan(**cztw_plan_args)
     # Connect to shared memory
     pupil_buffer = sm.SharedMemory(name=pupil_buf_name, create=False)
-    field_buffer = sm.SharedMemory(name=field_buf_name, create=False)
     pupil_array = np.ndarray((n, n, 2), dtype=precision, buffer=pupil_buffer.buf)
-    field_array = np.ndarray((n, n, z, 3), dtype=precision, buffer=field_buffer.buf)
+    field_array = np.ndarray((n, n, len(depths), 3), dtype=precision)
     print(os.getpid(), 'Planned transform. Connected to shared memory.', flush=True)
     while not stop_event.is_set():  # Main loop
         if work_event.is_set():
-            for i, dz in zip(workload, depths):
-                field_array[:, :, i, :] = _simulate_plane(pupil_array, dz, kzxy, px_per_m, czt, Gx, Gy, Gz)
+            print(os.getpid(), 'starting work...')
+            for iz, dz in enumerate(depths):
+                field_array[:, :, iz, :] = _simulate_plane(pupil_array, dz, kzxy, px_per_m, czt, Gx, Gy, Gz)
+            np.save(field_output_file, field_array)
+            print(os.getpid(), 'saved output to', field_output_file)
             barrier.wait()
     pupil_buffer.close()
-    field_buffer.close()
 
 
 def _simulate_plane(pupil: np.ndarray, dz: float, kzxy: np.ndarray, px_per_m, czt, Gx, Gy, Gz):
@@ -399,11 +426,21 @@ class VectorialObjective(object):
             self._precision = 'complex64'
         else:
             self._precision = 'complex128'
-        self._parallelized = bool(multiprocessing)
+        if z == 1:
+            self._parallelized = False
+        else:
+            self._parallelized = bool(multiprocessing)
         if multiprocessing is True:
             self._n_processes = mp.cpu_count()
         elif type(multiprocessing) is int:
+            self._parallelized = True
             self._n_processes = multiprocessing
+        if self._parallelized:
+            while z % self._n_processes != 0:
+                self._n_processes -= 1
+            if self._n_processes < 2:
+                raise ValueError(f'{z} planes must be evenly divisible among {self._n_processes} processes!')
+            print('Using', self._n_processes, 'processes to parallelize propagation to', z, 'planes')
         self._wavelength = wavelength
         self._index = sample_index
         self._focal_length = focal_length
@@ -466,52 +503,49 @@ class VectorialObjective(object):
         self._czt = None  # Transform plan in non-parallel mode
         self._worker_pool = []  # Workers in parallel mode
         self._work_event = None
-        self._abort_event = None
+        self._stop_event = None
         self._worker_barrier = None
         self._shared_pupil_buf = None  # Shared memory for the pupil. Used to improve performance in parallel mode.  Allocated in setup stage.
-        self._shared_field_buf = None  # Shared memory for the field. Used to improve performance in parallel mode. Allocated in setup stage.
         self._done = mp.Event()  # Set on cleanup
     
     def _setup(self):
         # The most time-consuming operations carried out the first time an Objective is used should be here
         if self._parallelized:
             # Set up sync system
-            self._abort_event = mp.Event()
+            self._stop_event = mp.Event()
             self._work_event = mp.Event()
             self._worker_barrier = mp.Barrier(self._n_processes + 1)
-            # self._worker_barrier = mp.Barrier(self._n_processes + 1)
-            self._shared_pupil_buf = sm.SharedMemory(size=int(np.prod(self._pupil_buf_shape) * type_bytes[self._precision]), create=True)
-            self._shared_field_buf = sm.SharedMemory(size=int(np.prod(self._field_buf_shape) * type_bytes[self._precision]), create=True)
+            pupil_buffer_nbytes = np.prod(self._pupil_buf_shape, dtype=np.uint64) * np.uint64(type_bytes[self._precision])
+            field_buffer_nbytes = np.prod(self._field_buf_shape, dtype=np.uint64) * np.uint64(type_bytes[self._precision])
+            print('Simulation requires {:.4f} GB total memory'.format((pupil_buffer_nbytes + field_buffer_nbytes) / 10**9))
+            self._shared_pupil_buf = sm.SharedMemory(size=int(pupil_buffer_nbytes), create=True)
             self._shared_pupil_array = np.ndarray(self._pupil_buf_shape, dtype=self._precision, buffer=self._shared_pupil_buf.buf)
-            self._shared_field_array = np.ndarray(self._field_buf_shape, dtype=self._precision, buffer=self._shared_field_buf.buf)
+            self._field_tempfile_prefix = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()) + '_')
             depths_per_worker = self._Z // self._n_processes
-            workloads = [np.arange(depths_per_worker) + (depths_per_worker * i) for i in range(self._n_processes)]
-            # Give extra jobs to the last worker
-            while workloads[-1][-1] < self._Z - 1:
-                workloads[-1] = np.append(workloads[-1], [workloads[-1][-1] + 1])
-            for i, workload in enumerate(workloads):
+            self._worker_output_shape = (self._N, self._N, depths_per_worker, 3)
+            self._workloads = [np.arange(depths_per_worker) + (depths_per_worker * i) for i in range(self._n_processes)]  # Planes for each worker to compute
+            for i, workload in enumerate(self._workloads):
                 print('Giving worker', i, 'workload', (tuple(workload), tuple(self._depths[workload])))
                 worker_args = {
-                    'stop_event': self._abort_event,
+                    'stop_event': self._stop_event,
                     'work_event': self._work_event,
                     'barrier': self._worker_barrier,
-                    'workload': tuple(workload),
                     'depths': tuple(self._depths[workload]),
                     'n': self._N,
                     'z': self._Z,
                     'precision': self._precision,
                     'pupil_buf_name': self._shared_pupil_buf.name,
-                    'field_buf_name': self._shared_field_buf.name,
+                    'field_output_file': self._field_tempfile_prefix + str(i).zfill(4),
                     'cztw_plan_args': dict(ndim=2, N=self._N, M=None, w0=-self._k_bandwidth, w1=self._k_bandwidth, precision=self._precision),
-                    'kzxy': self._kzxy.copy(),
+                    'kzxy': self._kzxy,
                     'px_per_m': self._px_per_m,
-                    'Gx': self._Gx.copy(),
-                    'Gy': self._Gy.copy(),
-                    'Gz': self._Gz.copy()
+                    'Gx': self._Gx,
+                    'Gy': self._Gy,
+                    'Gz': self._Gz
                 }
-                self._worker_pool.append(mp.Process(target=_worker, kwargs=worker_args))
+                self._worker_pool.append(mp.Process(target=_worker, daemon=True, kwargs=worker_args))
             for i, process in enumerate(self._worker_pool):
-                print('Starting process', i)
+                print('Starting process', i + 1, 'of', self._n_processes)
                 process.start()
         else:
             self._czt = cztw.plan(2, self._N, w0=-self._k_bandwidth, w1=self._k_bandwidth, precision=self._precision)
@@ -520,15 +554,22 @@ class VectorialObjective(object):
     def focus(self, pupil: VectorialPupil) -> VectorialFocalField:
         if not self._ready:
             self._setup()
-        field = VectorialFocalField((self._N, self._N, self._Z), self._field_depth, self._field_diameter, self._wavelength, self._na)
-        if self._parallelized and self._Z > 1:
+        field = VectorialFocalField((self._N, self._N, self._Z), self._field_depth, self._field_diameter, self._wavelength)
+        if self._parallelized:
             np.copyto(self._shared_pupil_array, pupil.xy)
             self._work_event.set()
             while self._worker_barrier.n_waiting < self._n_processes:
                 pass
             self._work_event.clear()
+            for f in glob.glob(self._field_tempfile_prefix + '*'):
+                i_workload = int(f.split('_')[-1].split('.')[0])
+                print('Loading', f, 'containing workload', i_workload)
+                iz = self._workloads[i_workload]
+                E = np.load(f)
+                field._assign(iz, E[:, :, :, 0], E[:, :, :, 1], E[:, :, :, 2])
+                print('Deleting', f)
+                os.remove(f)
             self._worker_barrier.wait()  # Releases workers
-            np.copyto(field._E, self._shared_field_array)
         else:
             for i, dz in enumerate(self._depths):
                 e = _simulate_plane(pupil.xy, dz, self._kzxy, self._px_per_m, self._czt, self._Gx, self._Gy, self._Gz)
@@ -537,11 +578,12 @@ class VectorialObjective(object):
 
     def __del__(self):
         if self._parallelized:
-            self._abort_event.set()
+            print('Stopping threads...')
+            self._stop_event.set()
             for process in self._worker_pool:
-                process.join()
-            self._shared_field_buf.unlink()
-            self._shared_pupil_buf.unlink()
+                print('Joining worker...')
+                process.join(timeout=2)
+            # self._shared_pupil_buf.unlink()  # Not sure if necessary
             
             
 Objective = VectorialObjective  # Alias for VectorialObjective class

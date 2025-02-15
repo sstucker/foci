@@ -13,6 +13,8 @@ Created on Thu Jan 23 01:31:27 2025
 
 import numpy as np
 import pyfftw as fftw
+import poppy.zernike
+import scipy.ndimage
 
 from foci.util import *
 
@@ -23,7 +25,7 @@ UM = 1.0
 NM = 1.0 / 1000.0
 
 
-PLANNER_EFFORT = 'FFTW_PATIENT'
+PLANNER_EFFORT = 'FFTW_MEASURE'
 
 
 def gaussian(N, waist):
@@ -35,26 +37,36 @@ def gaussian(N, waist):
 # -- Phase masks for common optical elements ----------------------------------
 
 
-def axicon(N, L, λ, θ, index, thickness, curvature=0):
+def axicon(N, L, λ, θ, index, thickness, curvature=0, decenter=(0, 0), tilt=0):
     """Axicon phase mask with variable tip curvature from [1]."""
     dx = L / N
     k = 2 * PI / λ  # Wavenumber
     r = np.linspace(-L / 2, L / 2, N)
     x, y = np.meshgrid(r, r)
-    rr = np.sqrt(x**2 + y**2)
-    return np.exp(1j * k * (index - 1.0) * (np.sqrt(rr**2 + curvature**2) - curvature) * np.tan(θ))
+    scale_x = np.cos(tilt)
+    scale_y = 1
+    rr = np.sqrt(((x * scale_x) + decenter[0])**2 + ((y * scale_y) + decenter[1])**2)
+    phi = (index - 1.0) * (np.sqrt(rr**2 + curvature**2) + curvature) * np.tan(θ)
+    return np.exp(1j * k * phi)
 
-def thin_lens(N, L, λ, f):
+
+def thin_lens(N, L, λ, fx, fy, decenter=(0, 0)):
     dx = L / N
     k = 2 * PI / λ  # Wavenumber
-    if dx < (λ * f) / N:
-        print('Warning! Undersampled!')
     r = np.linspace(-L / 2, L / 2, N)
     x, y = np.meshgrid(r, r)
-    return np.exp(-1j * k * (x**2 + y**2) / (2 * f))
+    x += decenter[0]
+    y += decenter[1]
+    return np.exp(-1j * k * (x**2 / fx + y**2 / fy) / 2)
+
+def tilt(N, L, λ, θ_x, θ_y):
+    k = 2 * PI / λ  # Wavenumber
+    r = np.linspace(-L / 2, L / 2, N)
+    x, y = np.meshgrid(r, r)
+    return np.exp(1j * k * (x * np.sin(θ_x) + y * np.sin(θ_y)))
 
 
-# -- Transfer functions -------------------------------------------------------
+# -- Transfer functions and real space operations------------------------------
 
 
 def propagate(N, L, λ, z, index=1.0):
@@ -65,9 +77,22 @@ def propagate(N, L, λ, z, index=1.0):
     F_r = np.fft.fftshift(F_r)
     F_x, F_y = np.meshgrid(F_r, F_r)
     kz = np.sqrt((k * index)**2 - (2 * PI * F_x)**2 - (2 * PI * F_y)**2 + 0j)
-    # kz[np.real(kz) < 0] = 0  # Remove evanescent waves
+    kz[np.real(kz) < 0] = 0  # Remove evanescent waves
     H = np.exp(1j * kz * z)
     return H
+
+def decenter(U, N, L, dx, dy):
+    r = np.linspace(-L / 2, L / 2, N)
+    x, y = np.meshgrid(r, r)
+    interp_func = scipy.interpolate.RegularGridInterpolator(
+        points=(r, r),
+        values=U,
+        method='linear',
+        bounds_error=False,
+        fill_value=0.0
+    )
+    shifted = np.stack(((y + dy).ravel(), (x + dx).ravel()), axis=-1)
+    return np.reshape(interp_func(shifted), (N, N))
 
 
 # -----------------------------------------------------------------------------
@@ -82,6 +107,7 @@ class Field:
             self._complex_dtype = 'complex64'
         self._width = L
         self._N = N
+        self._r = np.linspace(-self._width / 2, self._width / 2, N)
         self._dr = L / N  # unit / px
         self._wavelength = λ
         self._shape = (N, N)
@@ -133,14 +159,31 @@ class Field:
         self._x = self._fft_bwd(self._X)
         return Field(self._N, self._width, self._wavelength, u=self._x.copy(), precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
     
-    def mask_focus(self, f):
-        """Return field focused by a thin lens of focal length `f`."""
-        u = self._u * thin_lens(self._N, self._width, self._wavelength, f)
+    def decenter(self, dx, dy):
+        dx_pixel = dx / self._dr
+        dy_pixel = dy / self._dr
+        decentered_u = scipy.ndimage.shift(self._u, (dx_pixel, dy_pixel))
+        return Field(self._N, self._width, self._wavelength, u=decentered_u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
+    
+    def mask_circle_aper(self, r):
+        x, y = np.meshgrid(self._r, self._r)
+        mask = np.sqrt(x**2 + y**2) < r
+        u = self._u * mask
         return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
         
-    def mask_axicon(self, theta, thickness, curvature=0, index=1.5):
-        u = self._u * axicon(self._N, self._width, self._wavelength, theta, index, thickness, curvature=curvature)
+    def mask_focus(self, f, decenter=(0, 0)):
+        """Return field focused by a thin lens of focal length `f`."""
+        u = self._u * thin_lens(self._N, self._width, self._wavelength, f, f, decenter=decenter)
         return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
-
-    def __del__(self):
-        export_fftw_wisdom()
+    
+    def mask_focus_elliptical(self, fx, fy):
+        u = self._u * thin_lens(self._N, self._width, self._wavelength, fx, fy)
+        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
+        
+    def mask_axicon(self, theta, thickness, curvature=0, index=1.5, decenter=(0, 0), tilt=0):
+        u = self._u * axicon(self._N, self._width, self._wavelength, theta, index, thickness, curvature=curvature, decenter=decenter, tilt=tilt)
+        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
+    
+    def mask_tilt(self, theta_x, theta_y):
+        u = self._u * tilt(self._N, self._width, self._wavelength, theta_x, theta_y)
+        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd)) 

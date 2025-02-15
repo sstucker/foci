@@ -23,13 +23,16 @@ import os
 from foci.util import *
 
 
+planner_effort = 'FFTW_MEASURE'
+
+
 def next_power_of_2(a) -> int:
     return 2**(a - 1).bit_length()
     
 
 class CZTW(object):
     
-    def __init__(self, ndim, N, M, w0=-1/2, w1=1/2, precision='double', planner_effort='FFTW_PATIENT'):
+    def __init__(self, ndim, N, M, w0=-1/2, w1=1/2, precision='double', planner_effort=planner_effort):
         if precision in ['double, complex128', '128']:
             self._complex_dtype = 'complex128'
             self._real_dtype = 'float64'
@@ -123,9 +126,7 @@ class CZTW(object):
         self._x2 = self._fft_bwd_j(self._V * self._X2)
         return np.transpose(self._x2[:, :self._M] * self._g)
     
-    def __del__(self):
-        export_fftw_wisdom()
-
+    
 def plan(ndim, N, M=None, w0=-1/2, w1=1/2, precision='double') -> CZTW:
     if M is None:
         M = N
