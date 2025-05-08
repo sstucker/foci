@@ -25,13 +25,24 @@ UM = 1.0
 NM = 1.0 / 1000.0
 
 
-PLANNER_EFFORT = 'FFTW_MEASURE'
+PLANNER_EFFORT = 'FFTW_PATIENT'
 
 
 def gaussian(N, waist):
     r = np.linspace(-N / 2, N / 2, N, dtype=np.float64)
     x, y = np.meshgrid(r, r)
-    return np.exp(-(x**2 + y**2) / waist**2)
+    return np.exp(-2 * (x**2 + y**2) / waist**2)
+
+
+def gauss2d2(n, waist1, waist2):
+    r = np.linspace(-n / 2, n / 2, n)
+    xx, yy = np.meshgrid(r, r)
+    y = 1 / (2 * np.pi * waist1 * waist2) * np.exp(-(xx**2 / (2 * waist1**2) + yy** 2 / (2 * waist2**2)))
+    return y / y.max()
+
+
+def gauss2d(n, waist):
+    return gauss2d2(n, waist, waist)
 
 
 # -- Phase masks for common optical elements ----------------------------------
@@ -59,6 +70,54 @@ def thin_lens(N, L, λ, fx, fy, decenter=(0, 0)):
     y += decenter[1]
     return np.exp(-1j * k * (x**2 / fx + y**2 / fy) / 2)
 
+
+def thin_lens_array(N, L, λ, f, n_lenses, fill_fraction=1.0, smoothing=None):
+    k = 2 * PI / λ
+    lens_width = int(N / n_lenses)  # px
+    lenslet_r = np.linspace(-lens_width / 2, lens_width / 2, lens_width)
+    x, y = np.meshgrid(lenslet_r, lenslet_r)
+    lenslet = np.exp(-1j * k * (x**2 + y**2) / (2 * f))
+    if fill_fraction < 1:
+        dead_pixels = np.ceil((lens_width * (1 - fill_fraction))).astype(int)
+        lenslet[:dead_pixels, :] = 1.0
+        lenslet[-dead_pixels:, :] = 1.0
+        lenslet[:, 0:dead_pixels] = 1.0
+        lenslet[:, -dead_pixels:] = 1.0
+    phase_mask = np.tile(lenslet, (n_lenses, n_lenses))
+    if phase_mask.shape[0] > N:
+        phase_mask = phase_mask[0:N, 0:N]
+    elif phase_mask.shape[0] < N:
+        phase_mask = np.pad(phase_mask, np.ceil((N - phase_mask.shape[0]) / 2).astype(int))[:N, :N]
+    if smoothing is not None:
+        kernel = 1j * gauss2d(N, smoothing)     
+        phase_mask = np.fft.fftshift(np.fft.ifft2(np.fft.fft2(kernel) * np.fft.fft2(phase_mask)))
+    # import matplotlib.pyplot as plt
+    # plt.imshow(phase_mask.imag)
+    return phase_mask
+
+
+def thick_lens_array(N, L, λ, f, n_lenses, thickness, index=1.5):
+    k = 2 * PI / λ
+    lens_width = int(N / n_lenses)  # px
+    lenslet_r = np.linspace(-lens_width / 2, lens_width / 2, lens_width)
+    x, y = np.meshgrid(lenslet_r, lenslet_r)
+    r = np.sqrt(x**2 + y**2)
+    R = f * (index - 1)
+    sag = R - np.sqrt(np.clip(R**2 - r**2, 0, R**2))
+    phase_total = k * (index - 1) * (thickness + sag)
+    phase_center = k * (index - 1) * thickness
+    relative_phase = phase_total - phase_center
+    lenslet = np.exp(1j * relative_phase)
+    phase_mask = np.tile(lenslet, (n_lenses, n_lenses))
+    if phase_mask.shape[0] > N:
+        phase_mask = phase_mask[0:N, 0:N]
+    elif phase_mask.shape[0] < N:
+        phase_mask = np.pad(phase_mask, np.ceil((N - phase_mask.shape[0]) / 2).astype(int))[:N, :N]
+    import matplotlib.pyplot as plt
+    plt.imshow(phase_mask.imag)
+    return phase_mask
+
+
 def tilt(N, L, λ, θ_x, θ_y):
     k = 2 * PI / λ  # Wavenumber
     r = np.linspace(-L / 2, L / 2, N)
@@ -80,6 +139,7 @@ def propagate(N, L, λ, z, index=1.0):
     kz[np.real(kz) < 0] = 0  # Remove evanescent waves
     H = np.exp(1j * kz * z)
     return H
+
 
 def decenter(U, N, L, dx, dy):
     r = np.linspace(-L / 2, L / 2, N)
@@ -139,8 +199,14 @@ class Field:
         self._fft_bwd = fftw.builders.ifft2(self._X, overwrite_input=True, avoid_copy=True, threads=1, planner_effort=PLANNER_EFFORT, auto_align_input=True)
         export_fftw_wisdom()
     
+    def _copy(self, u):
+        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
+    
     def init_gaussian(self, w0):
-        self._u[:] = gaussian(self._N, w0 / self._dr)
+        return self._copy(gaussian(self._N, w0 / self._dr))
+    
+    def init_uniform(self):
+        return self._copy(np.ones(self._u.shape))
         
     def init_plane(self):
         self._u[:] = 1.0
@@ -168,22 +234,32 @@ class Field:
     def mask_circle_aper(self, r):
         x, y = np.meshgrid(self._r, self._r)
         mask = np.sqrt(x**2 + y**2) < r
-        u = self._u * mask
-        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
+        return self._copy(self._u * mask)
+    
+    def mask_rectangular_aper(self, w, h):
+        x, y = np.meshgrid(self._r, self._r)
+        mask = (np.abs(x) < w / 2) & (np.abs(y) < h / 2)
+        return self._copy(self._u * mask)
         
     def mask_focus(self, f, decenter=(0, 0)):
         """Return field focused by a thin lens of focal length `f`."""
-        u = self._u * thin_lens(self._N, self._width, self._wavelength, f, f, decenter=decenter)
-        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
+        return self._copy(self._u * thin_lens(self._N, self._width, self._wavelength, f, f, decenter=decenter))
     
     def mask_focus_elliptical(self, fx, fy):
-        u = self._u * thin_lens(self._N, self._width, self._wavelength, fx, fy)
-        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
-        
+        return self._copy(self._u * thin_lens(self._N, self._width, self._wavelength, fx, fy))
+    
+    def mask_lens_array(self, f, n_lenses, fill_fraction=1.0, smoothing=None):
+        return self._copy(self._u * thin_lens_array(self._N, self._width, self._wavelength, f, n_lenses, fill_fraction=fill_fraction, smoothing=smoothing))
+    
+    def mask_thick_lens_array(self, f, n_lenses, thickness, index=1.5):
+        return self._copy(self._u * thick_lens_array(self._N, self._width, self._wavelength, f, n_lenses, thickness, index=index))
+    
     def mask_axicon(self, theta, thickness, curvature=0, index=1.5, decenter=(0, 0), tilt=0):
-        u = self._u * axicon(self._N, self._width, self._wavelength, theta, index, thickness, curvature=curvature, decenter=decenter, tilt=tilt)
-        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd))
+        return self._copy(self._u * axicon(self._N, self._width, self._wavelength, theta, index, thickness, curvature=curvature, decenter=decenter, tilt=tilt))
     
     def mask_tilt(self, theta_x, theta_y):
-        u = self._u * tilt(self._N, self._width, self._wavelength, theta_x, theta_y)
-        return Field(self._N, self._width, self._wavelength, u=u, precision=self._complex_dtype, _transforms=(self._fft_fwd, self._fft_bwd)) 
+        return self._copy(self._u * tilt(self._N, self._width, self._wavelength, theta_x, theta_y))
+    
+    def intensity(self):
+        return np.abs(self._u)**2
+    

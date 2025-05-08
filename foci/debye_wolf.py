@@ -576,6 +576,10 @@ class VectorialObjective(object):
                 field._assign(i, e[:, :, 0], e[:, :, 1], e[:, :, 2])
         return field
 
+    @property
+    def wavelength(self):
+        return self._wavelength
+
     def __del__(self):
         if self._parallelized:
             print('Stopping threads...')
