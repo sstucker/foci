@@ -61,8 +61,8 @@ if __name__ == '__main__':
     
     start = time.time()
     u0 = rs.Field(N, PUPIL_SIMULATION_DIAMETER, objective.wavelength, precision='complex64')
-    u0.init_gaussian(5.0 * MM)  # Initial gaussian beam
-    u1 = u0.mask_circle_aper(2.0 * MM).propagate(500 * MM)
+    u0 = u0.init_gaussian(5.0 * MM).mask_circle_aper(2.0 * MM)  # Initial gaussian beam with mask
+    u1 = u0.propagate(500 * MM)
     u2 = u1.mask_focus_elliptical(np.inf, 75 * MM).propagate(75 * MM + 200 * MM).mask_focus(200 * MM).propagate(200 * MM)
     pupil = debye_wolf.VectorialPupil(u2._u, diameter=PUPIL_SIMULATION_DIAMETER)
     print('Simulated pupil, {:.3f} s total.'.format(time.time() - start))
@@ -76,7 +76,7 @@ if __name__ == '__main__':
     
     plt.figure('Pupil formation')
     ax = plt.subplot(2, 3, 1)
-    ax.imshow(u1.intensity(), cmap='gray', extent=pupil_extent)
+    ax.imshow(u0.intensity(), cmap='gray', extent=pupil_extent)
     ax.axis('off')
     ax.set_title('Incident beam')
     ax = plt.subplot(2, 3, 2)
@@ -92,24 +92,27 @@ if __name__ == '__main__':
     x_field = np.linspace(-N // 2, N // 2, N) * DX_FOCAL / UM
     
     ax = plt.subplot(2, 3, 4)
-    ax.plot(x_pupil, u1.intensity()[N // 2, :], '-k')
+    ax.plot(x_pupil, u1.intensity()[N // 2, :], '-k', linewidth=1.0)
     ax.spines.right.set_visible(False)
     ax.spines.left.set_visible(False)
     ax.spines.top.set_visible(False)
     ax.set_yticks([])
     ax.set_xlabel('mm')
     ax = plt.subplot(2, 3, 5)
-    ax.plot(x_pupil, u2.intensity()[:, N // 2], '-k')
+    ax.plot(x_pupil, u2.intensity()[:, N // 2], '-k', linewidth=1.0)
     ax.spines.right.set_visible(False)
     ax.spines.left.set_visible(False)
     ax.spines.top.set_visible(False)
     ax.set_yticks([])
     ax.set_xlabel('mm')
     ax = plt.subplot(2, 3, 6)
-    ax.plot(x_field, field.intensity()[N // 2, :], '-k')
+    ax.plot(x_field, field.intensity()[N // 2, :], '-k', linewidth=1.0)
     ax.spines.right.set_visible(False)
     ax.spines.left.set_visible(False)
     ax.spines.top.set_visible(False)
     ax.set_yticks([])
     ax.set_xlabel('um')
+    
+    plt.tight_layout()
+    plt.savefig('aper-cylinder-hybrid-example-psf')
             
