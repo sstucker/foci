@@ -11,3 +11,14 @@ Special foci can be created from inhomogenously-polarized pupils. The following 
 <a href="https://github.com/shohamlab/foci/blob/main/examples/rplg.py">
 <img src="https://raw.githubusercontent.com/shohamlab/foci/main/examples/rplg-example-pupil.png" height="256"><img src="https://github.com/shohamlab/foci/blob/main/examples/rplg-example-psf.png" height="256">
 </a>
+
+#### Hybrid simulations with Rayleigh-Sommerfeld propagation
+Non-vectorial propagation to the objective pupil plane enables fast simulation of complex optical systems:
+
+<a href="https://github.com/shohamlab/foci/blob/main/examples/aperture-cylinder-line.py">
+<img src="https://raw.githubusercontent.com/shohamlab/foci/main/examples/aper-cylinder-hybrid-example-psf.png" height="256">
+</a>
+
+<a href="https://github.com/shohamlab/foci/blob/main/examples/aperture-4f.py">
+<img src="https://raw.githubusercontent.com/shohamlab/foci/main/examples/aper-hybrid-example-psf.png" height="256">
+</a>
