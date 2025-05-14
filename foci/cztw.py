@@ -33,7 +33,7 @@ def next_power_of_2(a) -> int:
 class CZTW(object):
     
     def __init__(self, ndim, N, M, w0=-1/2, w1=1/2, precision='double', planner_effort=planner_effort):
-        if precision in ['double, complex128', '128']:
+        if precision in ['double', 'complex128', '128']:
             self._complex_dtype = 'complex128'
             self._real_dtype = 'float64'
         else:
@@ -79,10 +79,10 @@ class CZTW(object):
             self._x2 = fftw.empty_aligned((M, L), dtype=self._complex_dtype)
             self._X1 = fftw.empty_aligned((N, L), dtype=self._complex_dtype)
             self._X2 = fftw.empty_aligned((M, L), dtype=self._complex_dtype)
-            self._fft_fwd_i = fftw.builders.fft2(self._x1, axes=(True, False), overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True)
-            self._fft_fwd_j = fftw.builders.fft2(self._x2, axes=(True, False), overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True)
-            self._fft_bwd_i = fftw.builders.ifft2(self._X1, axes=(True, False), overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True)
-            self._fft_bwd_j = fftw.builders.ifft2(self._X2, axes=(True, False), overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True)
+            self._fft_fwd_i = fftw.builders.fft2(self._x1, axes=(True, False), overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True, norm='ortho')
+            self._fft_fwd_j = fftw.builders.fft2(self._x2, axes=(True, False), overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True, norm='ortho')
+            self._fft_bwd_i = fftw.builders.ifft2(self._X1, axes=(True, False), overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True, norm='ortho')
+            self._fft_bwd_j = fftw.builders.ifft2(self._X2, axes=(True, False), overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True, norm='ortho')
             self._fft_fwd_i(self._x1)
             self._fft_fwd_j(self._x2)
             self._fft_bwd_i(self._X1)
@@ -92,10 +92,10 @@ class CZTW(object):
             self._transform_shape = (L) 
             self._x = fftw.empty_aligned(self._transform_shape, dtype=self._complex_dtype)
             self._X = fftw.empty_aligned(self._transform_shape, dtype=self._complex_dtype)
-            self._fft_fwd = fftw.builders.fft(self._x, overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True)
-            self._fft_bwd = fftw.builders.ifft(self._X, overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True)
+            self._fft_fwd = fftw.builders.fft(self._x, overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True, norm='ortho')
+            self._fft_bwd = fftw.builders.ifft(self._X, overwrite_input=True, avoid_copy=True, threads=1, planner_effort=planner_effort, auto_align_input=True, norm='ortho')
             self._fft_fwd(self._x)
-            self._fft_Bwd(self._X)
+            self._fft_bwd(self._X)
             self.czt = self._czt1
             
         export_fftw_wisdom()
