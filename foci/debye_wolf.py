@@ -54,7 +54,7 @@ class FociWarning(UserWarning):
 
 class VectorialPupil(object):
     
-    def __init__(self, pupil_x, pupil_y=None, diameter=None, dtype=np.complex128):
+    def __init__(self, pupil_x, pupil_y=None, diameter=None, dtype=np.complex128, normalize=True):
         if pupil_x.shape[0] != pupil_x.shape[1]:
             raise ValueError('The pupil must be square!')
         self._shape = (pupil_x.shape[0], pupil_x.shape[0], 2)
@@ -63,6 +63,7 @@ class VectorialPupil(object):
         else:
             self._clear_aperture = diameter
         self._r = np.linspace(-self._clear_aperture / 2, self._clear_aperture / 2, self._shape[0])
+        self._dr = self._clear_aperture / pupil_x.shape[0]
         self._aperture_mask = np.zeros((self.n, self.n), dtype=int)  # todo other aperture shapes?
         for i, x in enumerate(self._r):
             for j, y in enumerate(self._r):
@@ -74,6 +75,8 @@ class VectorialPupil(object):
             self._pupil[:, :, 1] = 0.0 + 0.0j
         else:
             self._pupil[:, :, 1] = pupil_y
+        if normalize:
+            self.normalize_power()
     
     @property
     def n(self):
@@ -144,8 +147,17 @@ class VectorialPupil(object):
     def set_y(self, pupil_y: np.ndarray):
         self._pupil[:, :, 1] = pupil_y * self._aperture_mask
     
-    def intensity(self) -> np.ndarray:
-        return np.real(self.x * np.conj(self.x) + self.y * np.conj(self.y))
+    def power(self) -> float:
+        P_X = np.sum(np.abs(self.x)**2)
+        P_Y = np.sum(np.abs(self.y)**2)
+        return (P_X + P_Y) * self._dr**2
+    
+    def normalize_power(self, P_norm=1.0):
+        P = self.power()
+        s = np.sqrt(P_norm / P)
+        self._pupil[:, :, 0] *= s
+        self._pupil[:, :, 1] *= s
+        print('Power normalized to', self.power())
     
     def display(self, mask_threshold: float=1E-9, display_phase=True, display_polarization=True, polarization_downsample: int=None, cmap_amp='Reds', cmap_phase='Blues', display_colorbar=False):
         
