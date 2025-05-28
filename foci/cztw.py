@@ -57,8 +57,9 @@ class CZTW(object):
         r = np.arange(L - N, L)
         
         A = 1.0 * np.exp(2j * PI * w0)
-        dw = -2j * PI * (w1 - w0) / M
-        W = 1.0 * np.exp(dw)
+        self._dw = -2j * PI * (w1 - w0) / M
+        self._dk = (w1 - w0) / M
+        W = 1.0 * np.exp(self._dw)
         
         z = A * W**-k
         self._y = A**-n * W**(n**2/2)
@@ -103,7 +104,7 @@ class CZTW(object):
     def __call__(self, x: np.ndarray):
         # if x.shape != self._input_shape:
         #     raise ValueError('Invalid input shape {} for CZTW plan with input shape {}'.format(x.shape, self._input_shape))
-        return self.czt(x)
+        return self.czt(x) * self._dk * self._ndim
         
     def _czt1(self, x: np.ndarray):
         self._x[:] = 0

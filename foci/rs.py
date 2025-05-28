@@ -13,7 +13,6 @@ Created on Thu Jan 23 01:31:27 2025
 
 import numpy as np
 import pyfftw as fftw
-import poppy.zernike
 import scipy.ndimage
 
 from foci.util import *

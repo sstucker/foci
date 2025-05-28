@@ -391,14 +391,14 @@ def _worker(
         if work_event.is_set():
             print(os.getpid(), 'starting work...')
             for iz, dz in enumerate(depths):
-                field_array[:, :, iz, :] = _simulate_plane(pupil_array, dz, kzxy, px_per_m, czt, Gx, Gy, Gz)
+                field_array[:, :, iz, :] = _simulate_plane(pupil_array, pupil_dx, dz, dk, kzxy, px_per_m, czt, Gx, Gy, Gz)
             np.save(field_output_file, field_array)
             print(os.getpid(), 'saved output to', field_output_file)
             barrier.wait()
     pupil_buffer.close()
 
 
-def _simulate_plane(pupil: np.ndarray, dz: float, kzxy: np.ndarray, px_per_m, czt, Gx, Gy, Gz):
+def _simulate_plane(pupil: np.ndarray, pupil_dx: float, dz: float, dk: float, kzxy: np.ndarray, px_per_m: float, czt, Gx, Gy, Gz):
     # Each depth experiences additional free space propagation
     propagation_tf = np.exp(2j * PI * kzxy * dz * px_per_m)
 
@@ -415,7 +415,8 @@ def _simulate_plane(pupil: np.ndarray, dz: float, kzxy: np.ndarray, px_per_m, cz
     E_Yy = czt(l_0y * np.rot90(Gx))
     E_Yz = czt(l_0y * np.rot90(Gz))
     
-    return np.stack((E_Xx + E_Yx, E_Xy + E_Yy, E_Xz + E_Yz), axis=-1)  # Return E_X, E_Y, E_Z
+    norm = (px_per_m * pupil_dx / np.sqrt(2))
+    return np.stack((E_Xx + E_Yx, E_Xy + E_Yy, E_Xz + E_Yz), axis=-1) * norm  # Return E_X, E_Y, E_Z
 
 
 class VectorialObjective(object):
@@ -461,6 +462,8 @@ class VectorialObjective(object):
         self._Z = z  # Depths to compute 
         self._field_diameter = field_diameter
         
+        self._pupil_dx = self._pupil_diameter / self._N
+        
         angle_of_convergence = np.arctan(pupil_diameter / (2 * focal_length))
         self._na = self._index * np.sin(angle_of_convergence)
         
@@ -483,6 +486,7 @@ class VectorialObjective(object):
         k = self._index * 2 * PI / self._wavelength  # Wavenumber
         dk = k / (2 * PI) / self._px_per_m
         self._k_bandwidth = dk * np.sin(self._angle_of_convergence)
+        self._dk = dk
         
         # k-space coordinates of pupil plane
         kx = np.linspace(-self._k_bandwidth, self._k_bandwidth, self._N)
@@ -584,7 +588,7 @@ class VectorialObjective(object):
             self._worker_barrier.wait()  # Releases workers
         else:
             for i, dz in enumerate(self._depths):
-                e = _simulate_plane(pupil.xy, dz, self._kzxy, self._px_per_m, self._czt, self._Gx, self._Gy, self._Gz)
+                e = _simulate_plane(pupil.xy, self._pupil_dx, dz, self._dk, self._kzxy, self._px_per_m, self._czt, self._Gx, self._Gy, self._Gz)
                 field._assign(i, e[:, :, 0], e[:, :, 1], e[:, :, 2])
         return field
 
