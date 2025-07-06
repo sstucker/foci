@@ -11,9 +11,11 @@ import numpy as np
 import pyfftw as fftw
 
 
-MM = 1000.0
-UM = 1.0
-NM = 1.0 / 1000.0
+# Global package units
+M = 1.
+MM = M / 1000.
+UM = MM / 1000.
+NM = UM / 1000.
 
 
 try:

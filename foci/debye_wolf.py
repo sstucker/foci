@@ -26,6 +26,7 @@ import tempfile
 import uuid
 import copy
 from foci import cztw
+from foci.util import *
 import numpy as np
 from numpy import pi as PI
 from multiprocessing import shared_memory as sm
@@ -35,11 +36,6 @@ import prysm.polynomials
 
 
 mp = mp.get_context('spawn')
-
-
-MM = 1000.0
-UM = 1.0
-NM = 1.0 / 1000.0
 
 
 type_bytes = {
@@ -59,7 +55,7 @@ class VectorialPupil(object):
             raise ValueError('The pupil must be square!')
         self._shape = (pupil_x.shape[0], pupil_x.shape[0], 2)
         if diameter is None:
-            self._clear_aperture = float(pupil_x.shape[0])
+            self._clear_aperture = float(pupil_x.shape[0]) * MM  # Assume millimeters if no unit is provided
         else:
             self._clear_aperture = diameter
         self._r = np.linspace(-self._clear_aperture / 2, self._clear_aperture / 2, self._shape[0])
@@ -152,12 +148,14 @@ class VectorialPupil(object):
         P_Y = np.sum(np.abs(self.y)**2)
         return (P_X + P_Y) * self._dr**2
     
+    def intensity(self) -> float:
+        return np.abs(self.x)**2 + np.abs(self.y)**2
+    
     def normalize_power(self, P_norm=1.0):
         P = self.power()
         s = np.sqrt(P_norm / P)
         self._pupil[:, :, 0] *= s
         self._pupil[:, :, 1] *= s
-        print('Power normalized to', self.power())
     
     def display(self, mask_threshold: float=1E-9, display_phase=True, display_polarization=True, polarization_downsample: int=None, cmap_amp='Reds', cmap_phase='Blues', display_colorbar=False):
         
@@ -226,6 +224,11 @@ class VectorialFocalField(object):
         self._wavelength = wavelength
         self._r = np.linspace(-field_diameter / 2, field_diameter / 2, shape[0])
         self._z = np.linspace(-field_depth / 2, field_depth / 2, shape[-1])
+        self._dr = np.abs(self._r[1] - self._r[0])
+        if len(self._z) > 1:
+            self._dz = np.abs(self._z[1] - self._z[0])
+        else: 
+            self._dz = 1
         self._filename = None  # for memmaped fields
         now_str = datetime.now().strftime("%Y%m%d%H%M%S")
         param_str = str(int(wavelength / NM)) + '_' + '_'.join(str(i) for i in shape) + '_' + precision
@@ -263,6 +266,12 @@ z
 
         """
         return np.abs(self._E[:, :, :, 0])**2 + np.abs(self._E[:, :, :, 1])**2 + np.abs(self._E[:, :, :, 2])**2
+    
+    def power(self) -> float:
+        P_X = np.sum(np.abs(self.E_X())**2)
+        P_Y = np.sum(np.abs(self.E_Y())**2)
+        P_Z = np.sum(np.abs(self.E_Z())**2)
+        return (P_X + P_Y + P_Z) * self._dr**2 * self._dz
     
     def E_X(self) -> np.ndarray:
         return self._E[:, :, :, 0]

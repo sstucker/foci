@@ -19,10 +19,6 @@ from foci.util import *
 
 PI = np.pi
 
-MM = 1000.0
-UM = 1.0
-NM = 1.0 / 1000.0
-
 
 PLANNER_EFFORT = 'FFTW_PATIENT'
 
